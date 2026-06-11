@@ -1,6 +1,6 @@
 # Portfolio Deployment Guide
 
-Get a live, always-on demo at `https://voice.yourdomain.com` for **~$6/month**.
+Get a live, always-on demo at `https://voice.rashesh.dev` for **~$6/month**.
 
 ---
 
@@ -76,7 +76,7 @@ apt-get update && apt-get install -y caddy
 
 # Create Caddyfile
 cat > /etc/caddy/Caddyfile << 'EOF'
-voice.yourdomain.com {
+voice.rashesh.dev {
     reverse_proxy localhost:8000 {
         # Required for WebSocket upgrade
         header_up Host {host}
@@ -93,7 +93,7 @@ systemctl enable caddy
 systemctl restart caddy
 ```
 
-> Replace `voice.yourdomain.com` with your actual subdomain.  
+> Replace `voice.rashesh.dev` with your actual subdomain.  
 > Point your domain's A record to `YOUR_SERVER_IP` before this step.
 
 ---
@@ -134,12 +134,12 @@ docker compose exec llm-agent ollama list
 docker compose ps
 
 # Test each service
-curl https://voice.yourdomain.com/health
+curl https://voice.rashesh.dev/health
 curl http://localhost:8001/health   # whisper-stt
 curl http://localhost:8002/health   # tts-service
 
 # Open in browser
-echo "Open: https://voice.yourdomain.com"
+echo "Open: https://voice.rashesh.dev"
 ```
 
 ---
@@ -207,7 +207,7 @@ EOF
 # Add to Caddyfile (webhook endpoint)
 cat >> /etc/caddy/Caddyfile << 'EOF'
 
-voice.yourdomain.com/webhook {
+voice.rashesh.dev/webhook {
     reverse_proxy localhost:9000
 }
 EOF
@@ -217,7 +217,7 @@ systemctl reload caddy
 webhook -hooks /opt/webhook/hooks.json -port 9000 -hotreload &
 ```
 
-Then in GitHub → repo Settings → Webhooks → add `https://voice.yourdomain.com/webhook` with your secret. Every `git push` to main auto-deploys.
+Then in GitHub → repo Settings → Webhooks → add `https://voice.rashesh.dev/webhook` with your secret. Every `git push` to main auto-deploys.
 
 ---
 
@@ -278,11 +278,11 @@ docker compose up -d
 
 Before sharing the link publicly:
 
-- [ ] `https://voice.yourdomain.com` loads and mic works
+- [ ] `https://voice.rashesh.dev` loads and mic works
 - [ ] Test all 4 demo questions from DEMO-SCRIPT.md
 - [ ] Add the live URL to your GitHub README badge:
   ```markdown
-  [![Live Demo](https://img.shields.io/badge/Live%20Demo-voice.yourdomain.com-brightgreen)](https://voice.yourdomain.com)
+  [![Live Demo](https://img.shields.io/badge/Live%20Demo-voice.rashesh.dev-brightgreen)](https://voice.rashesh.dev)
   ```
 - [ ] Add the URL to your LinkedIn "Featured" section
 - [ ] Pin the repo on your GitHub profile
