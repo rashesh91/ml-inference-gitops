@@ -1,6 +1,7 @@
 # ml-inference-gitops — Voice Agentic AI Platform
 
-[![Live Demo](https://img.shields.io/badge/Live%20Demo-voice.yourdomain.com-brightgreen)](https://voice.yourdomain.com)
+[![GitHub](https://img.shields.io/badge/GitHub-rashesh91%2Fml--inference--gitops-181717?logo=github)](https://github.com/rashesh91/ml-inference-gitops)
+[![Live Demo](https://img.shields.io/badge/Live%20Demo-coming%20soon-lightgrey)](#)
 [![Python](https://img.shields.io/badge/Python-3.11-blue)](https://python.org)
 [![Kubernetes](https://img.shields.io/badge/Kubernetes-GPU--aware-326CE5)](https://kubernetes.io)
 [![ArgoCD](https://img.shields.io/badge/ArgoCD-GitOps-EF7B4D)](https://argoproj.github.io/cd)
