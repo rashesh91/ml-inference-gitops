@@ -70,3 +70,11 @@ spec:
         - group: apps
           kind: StatefulSet
           jsonPointers: [/spec/volumeClaimTemplates]
+        - group: apps
+          kind: Deployment
+          name: voice-gateway
+          jsonPointers:
+            - /spec/replicas
+            - /spec/template/metadata/annotations/ai.rashesh.dev~1model-version
+            - /spec/template/metadata/annotations/kubectl.kubernetes.io~1restartedAt
+            - /spec/template/spec/containers/0/env

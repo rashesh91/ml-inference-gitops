@@ -25,6 +25,8 @@ from pathlib import Path
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from prometheus_client import Gauge
+from prometheus_fastapi_instrumentator import Instrumentator
 from pydantic import BaseModel
 
 from .pipeline import Session, process_voice_turn
@@ -36,6 +38,13 @@ STATIC_DIR = Path(__file__).parent.parent / "static"
 
 app = FastAPI(title="Voice Agentic AI Gateway", version="1.0.0")
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
+# Prometheus metrics — KEDA ScaledObject watches websocket_active_connections
+active_ws_connections = Gauge(
+    "websocket_active_connections",
+    "Number of active WebSocket sessions",
+)
+Instrumentator().instrument(app).expose(app, endpoint="/metrics")
 
 # In-memory sessions  (use Redis for multi-pod prod)
 _sessions: dict[str, Session] = {}
@@ -88,6 +97,7 @@ async def serve_frontend():
 @app.websocket("/ws/{session_id}")
 async def websocket_endpoint(ws: WebSocket, session_id: str):
     await ws.accept()
+    active_ws_connections.inc()
     session = _sessions.setdefault(session_id, Session(session_id))
     log.info(f"WebSocket connected: {session_id}")
 
@@ -125,6 +135,8 @@ async def websocket_endpoint(ws: WebSocket, session_id: str):
             await ws.send_json({"type": "error", "message": str(e)})
         except Exception:
             pass
+    finally:
+        active_ws_connections.dec()
 
 
 async def _handle_voice_turn(ws: WebSocket, session: Session, audio_bytes: bytes):

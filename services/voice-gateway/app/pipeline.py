@@ -3,15 +3,31 @@ Voice pipeline: audio bytes → transcript → LLM agent → TTS audio bytes
 """
 import base64
 import logging
+import os
 from dataclasses import dataclass, field
 from typing import Callable
 
 import httpx
+from opentelemetry import trace
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import BatchSpanProcessor
+from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
+from opentelemetry.sdk.resources import Resource
 
 from .agent import AgentEvent, run_agent
 from .config import settings
 
 log = logging.getLogger(__name__)
+
+# OTel setup — no-ops gracefully if OTEL_EXPORTER_OTLP_ENDPOINT is unset
+_otlp_endpoint = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", "")
+if _otlp_endpoint:
+    _resource = Resource.create({"service.name": "voice-gateway", "service.version": "1.0.0"})
+    _provider = TracerProvider(resource=_resource)
+    _provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter(endpoint=_otlp_endpoint)))
+    trace.set_tracer_provider(_provider)
+
+_tracer = trace.get_tracer("voice-gateway")
 
 
 @dataclass
@@ -44,11 +60,17 @@ async def process_voice_turn(
     Full voice turn pipeline.
     on_event(event_type, data) is called for progress updates sent over WebSocket.
     """
+    with _tracer.start_as_current_span("voice-gateway.process_turn") as root_span:
+        root_span.set_attribute("session.id", session.session_id)
+
     # ── Step 1: Speech-to-Text ──────────────────────────────────────────────
     if on_event:
         on_event("status", {"message": "Transcribing your speech..."})
 
-    transcript = await _transcribe(audio_bytes)
+    with _tracer.start_as_current_span("stt.transcribe") as stt_span:
+        stt_span.set_attribute("audio.size_bytes", len(audio_bytes))
+        transcript = await _transcribe(audio_bytes)
+        stt_span.set_attribute("transcript.length", len(transcript))
     log.info(f"[{session.session_id}] Transcript: '{transcript}'")
 
     if on_event:
@@ -77,18 +99,26 @@ async def process_voice_turn(
             if on_event:
                 on_event("tool_result", evt.data)
 
-    answer = await run_agent(
-        user_text=transcript,
-        history=session.history,
-        on_event=handle_agent_event,
-    )
+    with _tracer.start_as_current_span("agent.react_loop") as agent_span:
+        agent_span.set_attribute("model", settings.llm_model)
+        answer = await run_agent(
+            user_text=transcript,
+            history=session.history,
+            on_event=handle_agent_event,
+        )
+        agent_span.set_attribute("tool_calls.count", len(tool_calls))
+        agent_span.set_attribute("answer.length", len(answer))
     log.info(f"[{session.session_id}] Answer: '{answer}'")
 
     # ── Step 3: Text-to-Speech ──────────────────────────────────────────────
     if on_event:
         on_event("status", {"message": "Generating speech..."})
 
-    audio_b64 = await _synthesize(answer)
+    with _tracer.start_as_current_span("tts.synthesize") as tts_span:
+        tts_span.set_attribute("text.length", len(answer))
+        tts_span.set_attribute("voice", settings.tts_voice)
+        audio_b64 = await _synthesize(answer)
+        tts_span.set_attribute("audio_b64.length", len(audio_b64))
     if on_event:
         on_event("response", {"text": answer})
 

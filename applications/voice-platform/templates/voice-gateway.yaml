@@ -32,6 +32,12 @@ spec:
               value: {{ .Values.llmAgent.model.name | quote }}
             - name: TTS_VOICE
               value: {{ .Values.ttsService.voice | quote }}
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: "http://otel-collector.ai-platform-ops.svc.cluster.local:4317"
+            - name: MODEL_NAME
+              value: ""
+            - name: MODEL_VERSION
+              value: ""
           resources:
             requests:
               memory: {{ .Values.voiceGateway.resources.requests.memory | quote }}
@@ -47,6 +53,22 @@ spec:
             httpGet: { path: /health, port: 8000 }
             initialDelaySeconds: 5
             periodSeconds: 10
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: voice-gateway
+  labels:
+    app: voice-gateway
+    release: kube-prometheus-stack
+spec:
+  selector:
+    matchLabels:
+      app: voice-gateway
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 15s
 {{- if .Values.podDisruptionBudget.enabled }}
 ---
 apiVersion: policy/v1
