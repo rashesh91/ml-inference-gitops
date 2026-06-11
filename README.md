@@ -39,6 +39,69 @@ Browser plays audio response
 
 ---
 
+## Minimum Server Requirements
+
+### Local Development (Docker Compose, no GPU)
+
+| Resource | Minimum | Recommended |
+|----------|---------|-------------|
+| CPU | 4 cores | 8 cores |
+| RAM | 10 GB | 16 GB |
+| Disk | 15 GB free | 30 GB free |
+| OS | Linux / macOS / Windows (WSL2) | Ubuntu 22.04 |
+| Docker | v24+ | v24+ |
+| Internet | Required (edge-tts calls Microsoft API) | Stable broadband |
+
+> Uses Ollama + `mistral:7b-q4_0` (4-bit quantized). Inference is slower on CPU (~10–20s/response) but fully functional.
+> Switch to `tinyllama` for faster responses on 8 GB RAM machines.
+
+---
+
+### Portfolio VPS (Single Server, CPU-only)
+
+Runs the full stack on one cheap cloud VM.
+
+| Resource | Minimum | Recommended |
+|----------|---------|-------------|
+| CPU | 2 vCPU | 4 vCPU |
+| RAM | 6 GB | 8 GB |
+| Disk | 20 GB SSD | 40 GB SSD |
+| Network | 100 Mbps | 200 Mbps |
+| OS | Ubuntu 22.04 LTS | Ubuntu 22.04 LTS |
+| Provider example | Hetzner CX22 — €3.90/mo | Hetzner CX32 — €7.90/mo |
+
+---
+
+### Production Kubernetes (GPU cluster)
+
+| Node type | Count | CPU | RAM | GPU | Role |
+|-----------|-------|-----|-----|-----|------|
+| GPU node | 1–2 | 8 vCPU | 32 GB | 1× NVIDIA T4 (16 GB VRAM) or better | Whisper STT + vLLM |
+| CPU node | 2 | 4 vCPU | 8 GB | — | Gateway, TTS, monitoring |
+| **Total minimum** | **3 nodes** | **16 vCPU** | **48 GB** | **1× T4** | |
+
+**Per-service resource breakdown:**
+
+| Service | CPU request | RAM request | GPU |
+|---------|------------|-------------|-----|
+| `whisper-stt` | 2 cores | 4 GB | 1× GPU (optional, CPU fallback works) |
+| `llm-agent` (vLLM) | 4 cores | 16 GB | 1× GPU required for Mistral 7B |
+| `tts-service` | 0.25 cores | 256 MB | None |
+| `voice-gateway` | 0.5 cores | 512 MB | None |
+| Prometheus + Grafana | 1 core | 2 GB | None |
+| ArgoCD | 1 core | 1 GB | None |
+
+**GPU requirements by model:**
+
+| Model | VRAM needed | CPU RAM fallback |
+|-------|------------|-----------------|
+| TinyLlama 1.1B | 2 GB VRAM | 4 GB RAM |
+| Mistral 7B (Q4 quantized) | 6 GB VRAM | 8 GB RAM (slow) |
+| Mistral 7B (full BF16) | 16 GB VRAM | not recommended |
+| Llama 2 13B | 28 GB VRAM | not recommended |
+
+---
+
 ## Services
 
 | Service | Port | GPU | Purpose |
