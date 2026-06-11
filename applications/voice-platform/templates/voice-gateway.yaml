@@ -1,0 +1,100 @@
+{{- if .Values.voiceGateway.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: voice-gateway
+  labels:
+    app: voice-gateway
+    component: gateway
+spec:
+  replicas: {{ .Values.voiceGateway.replicas }}
+  selector:
+    matchLabels: { app: voice-gateway }
+  template:
+    metadata:
+      labels: { app: voice-gateway, component: gateway }
+    spec:
+      serviceAccountName: {{ .Values.serviceAccount.name }}
+      containers:
+        - name: voice-gateway
+          image: "{{ .Values.global.imageRegistry }}{{ .Values.voiceGateway.image }}"
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          ports:
+            - { containerPort: 8000, name: http }
+          env:
+            - name: STT_URL
+              value: "http://whisper-stt:8001"
+            - name: TTS_URL
+              value: "http://tts-service:8002"
+            - name: LLM_URL
+              value: "http://llm-agent:8000"
+            - name: LLM_MODEL
+              value: {{ .Values.llmAgent.model.name | quote }}
+            - name: TTS_VOICE
+              value: {{ .Values.ttsService.voice | quote }}
+          resources:
+            requests:
+              memory: {{ .Values.voiceGateway.resources.requests.memory | quote }}
+              cpu: {{ .Values.voiceGateway.resources.requests.cpu | quote }}
+            limits:
+              memory: {{ .Values.voiceGateway.resources.limits.memory | quote }}
+              cpu: {{ .Values.voiceGateway.resources.limits.cpu | quote }}
+          livenessProbe:
+            httpGet: { path: /health, port: 8000 }
+            initialDelaySeconds: 15
+            periodSeconds: 30
+          readinessProbe:
+            httpGet: { path: /health, port: 8000 }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+{{- if .Values.podDisruptionBudget.enabled }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: voice-gateway-pdb
+spec:
+  minAvailable: {{ .Values.podDisruptionBudget.minAvailable }}
+  selector:
+    matchLabels: { app: voice-gateway }
+{{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: voice-gateway
+  labels: { app: voice-gateway }
+spec:
+  selector: { app: voice-gateway }
+  ports:
+    - { name: http, port: 80, targetPort: 8000 }
+{{- if .Values.voiceGateway.ingress.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: voice-gateway
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    # Enable WebSocket upgrade
+    nginx.ingress.kubernetes.io/configuration-snippet: |
+      proxy_set_header Upgrade $http_upgrade;
+      proxy_set_header Connection "upgrade";
+spec:
+  ingressClassName: {{ .Values.voiceGateway.ingress.className }}
+  tls:
+    - hosts: [{{ .Values.voiceGateway.ingress.host | quote }}]
+      secretName: {{ .Values.voiceGateway.ingress.tlsSecret }}
+  rules:
+    - host: {{ .Values.voiceGateway.ingress.host | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: voice-gateway
+                port: { name: http }
+{{- end }}
+{{- end }}

@@ -1,0 +1,14 @@
+apiVersion: v2
+name: vllm-serving
+description: GPU-accelerated LLM inference serving with vLLM
+type: application
+version: 0.1.0
+appVersion: "0.4.0"
+keywords:
+  - vllm
+  - llm
+  - gpu
+  - inference
+  - serving
+maintainers:
+  - name: ml-infra-team

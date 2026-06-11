@@ -1,0 +1,31 @@
+# Production overrides — multi-replica, full model, strict resources
+replicaCount: 2
+
+model:
+  name: "llama2-7b"
+  huggingfaceId: "meta-llama/Llama-2-7b-chat-hf"
+  maxModelLen: 4096
+  gpuMemoryUtilization: 0.92
+  dtype: "bfloat16"
+
+gpu:
+  count: 1
+
+resources:
+  requests:
+    memory: "20Gi"
+    cpu: "6"
+  limits:
+    memory: "32Gi"
+    cpu: "12"
+
+persistence:
+  enabled: true
+  storageClass: "fast-ssd"
+  size: 60Gi
+
+priorityClassName: "gpu-inference-high"
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1

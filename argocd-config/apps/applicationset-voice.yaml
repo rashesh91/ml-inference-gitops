@@ -1,0 +1,72 @@
+# Voice Agentic AI Platform — multi-environment ApplicationSet (Wave 3)
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: voice-platform-environments
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "3"
+spec:
+  generators:
+    - list:
+        elements:
+          - env: dev
+            namespace: dev
+            autoSync: "true"
+            gpuEnabled: "false"        # CPU-only in dev
+            whisperModel: "tiny"
+            llmModel: "mistral"
+            llmUrl: "http://ollama:11434"  # Ollama for dev
+            replicas: "1"
+          - env: staging
+            namespace: staging
+            autoSync: "false"
+            gpuEnabled: "true"
+            whisperModel: "base"
+            llmModel: "mistral-7b"
+            llmUrl: "http://llm-agent:8000"
+            replicas: "1"
+          - env: prod
+            namespace: prod
+            autoSync: "false"
+            gpuEnabled: "true"
+            whisperModel: "small"       # better accuracy in prod
+            llmModel: "mistral-7b"
+            llmUrl: "http://llm-agent:8000"
+            replicas: "2"
+  template:
+    metadata:
+      name: "voice-platform-{{env}}"
+      namespace: argocd
+      labels:
+        environment: "{{env}}"
+        app: voice-platform
+      finalizers:
+        - resources-finalizer.argocd.argoproj.io
+    spec:
+      project: ml-applications
+      source:
+        repoURL: https://github.com/rashesh91/ml-inference-gitops.git
+        targetRevision: HEAD
+        path: applications/voice-platform
+        helm:
+          releaseName: "voice-{{env}}"
+          parameters:
+            - name: whisperStt.model.size
+              value: "{{whisperModel}}"
+            - name: whisperStt.gpu.enabled
+              value: "{{gpuEnabled}}"
+            - name: llmAgent.model.name
+              value: "{{llmModel}}"
+            - name: voiceGateway.replicas
+              value: "{{replicas}}"
+      destination:
+        server: https://kubernetes.default.svc
+        namespace: "{{namespace}}"
+      syncPolicy:
+        syncOptions:
+          - CreateNamespace=false
+      ignoreDifferences:
+        - group: apps
+          kind: StatefulSet
+          jsonPointers: [/spec/volumeClaimTemplates]

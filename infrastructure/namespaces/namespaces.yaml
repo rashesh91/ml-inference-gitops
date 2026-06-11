@@ -1,0 +1,105 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: infra
+  labels:
+    managed-by: argocd
+    tier: infrastructure
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: gpu-workloads
+  labels:
+    managed-by: argocd
+    tier: application
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: argocd
+  labels:
+    managed-by: argocd
+    tier: platform
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: dev
+  labels:
+    managed-by: argocd
+    environment: development
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: staging
+  labels:
+    managed-by: argocd
+    environment: staging
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: prod
+  labels:
+    managed-by: argocd
+    environment: production
+---
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: gpu-workloads-quota
+  namespace: gpu-workloads
+spec:
+  hard:
+    requests.cpu: "16"
+    requests.memory: 64Gi
+    limits.cpu: "32"
+    limits.memory: 128Gi
+    requests.nvidia.com/gpu: "4"
+    limits.nvidia.com/gpu: "4"
+    pods: "20"
+---
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: dev-quota
+  namespace: dev
+spec:
+  hard:
+    requests.cpu: "4"
+    requests.memory: 8Gi
+    limits.cpu: "8"
+    limits.memory: 16Gi
+    pods: "10"
+---
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: staging-quota
+  namespace: staging
+spec:
+  hard:
+    requests.cpu: "8"
+    requests.memory: 16Gi
+    limits.cpu: "16"
+    limits.memory: 32Gi
+    requests.nvidia.com/gpu: "2"
+    limits.nvidia.com/gpu: "2"
+    pods: "15"
+---
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: prod-quota
+  namespace: prod
+spec:
+  hard:
+    requests.cpu: "16"
+    requests.memory: 64Gi
+    limits.cpu: "32"
+    limits.memory: 128Gi
+    requests.nvidia.com/gpu: "8"
+    limits.nvidia.com/gpu: "8"
+    pods: "30"

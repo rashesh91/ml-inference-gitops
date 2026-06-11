@@ -1,0 +1,144 @@
+{{- if .Values.llmAgent.enabled }}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: llm-agent
+  labels:
+    app: llm-agent
+    component: llm
+spec:
+  replicas: {{ .Values.llmAgent.replicas }}
+  selector:
+    matchLabels: { app: llm-agent }
+  serviceName: llm-agent-headless
+  podManagementPolicy: Parallel
+  template:
+    metadata:
+      labels: { app: llm-agent, component: llm }
+    spec:
+      serviceAccountName: {{ .Values.serviceAccount.name }}
+      priorityClassName: {{ .Values.priorityClassName }}
+      {{- if .Values.llmAgent.tolerations }}
+      tolerations: {{- toYaml .Values.llmAgent.tolerations | nindent 8 }}
+      {{- end }}
+      {{- if .Values.llmAgent.nodeSelector }}
+      nodeSelector: {{- toYaml .Values.llmAgent.nodeSelector | nindent 8 }}
+      {{- end }}
+      initContainers:
+        - name: model-downloader
+          image: python:3.11-slim
+          command:
+            - /bin/sh
+            - -c
+            - |
+              pip install -q huggingface-hub && \
+              python -c "
+              from huggingface_hub import snapshot_download
+              import os
+              token = os.environ.get('HUGGING_FACE_HUB_TOKEN', '')
+              snapshot_download(
+                  repo_id='{{ .Values.llmAgent.model.huggingfaceId }}',
+                  local_dir='{{ .Values.llmAgent.model.cacheDir }}/{{ .Values.llmAgent.model.name }}',
+                  token=token if token else None,
+                  ignore_patterns=['*.bin'],
+              )
+              print('Model ready')
+              "
+          env:
+            - name: HUGGING_FACE_HUB_TOKEN
+              valueFrom:
+                secretKeyRef: { name: hf-token, key: token, optional: true }
+          volumeMounts:
+            - name: model-cache
+              mountPath: {{ .Values.llmAgent.model.cacheDir }}
+          resources:
+            requests: { memory: "2Gi", cpu: "1" }
+            limits:   { memory: "4Gi", cpu: "2" }
+      containers:
+        - name: vllm
+          image: "{{ .Values.llmAgent.image }}"
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          command:
+            - python
+            - -m
+            - vllm.entrypoints.openai.api_server
+            - --model={{ .Values.llmAgent.model.cacheDir }}/{{ .Values.llmAgent.model.name }}
+            - --max-model-len={{ .Values.llmAgent.model.maxModelLen }}
+            - --gpu-memory-utilization={{ .Values.llmAgent.model.gpuMemoryUtilization }}
+            - --dtype={{ .Values.llmAgent.model.dtype }}
+            - --host=0.0.0.0
+            - --port=8000
+            - --served-model-name={{ .Values.llmAgent.model.name }}
+          ports:
+            - { containerPort: 8000, name: http }
+          env:
+            - name: HUGGING_FACE_HUB_TOKEN
+              valueFrom:
+                secretKeyRef: { name: hf-token, key: token, optional: true }
+          resources:
+            requests:
+              memory: {{ .Values.llmAgent.resources.requests.memory | quote }}
+              cpu: {{ .Values.llmAgent.resources.requests.cpu | quote }}
+              {{- if .Values.llmAgent.gpu.enabled }}
+              nvidia.com/gpu: {{ .Values.llmAgent.gpu.count }}
+              {{- end }}
+            limits:
+              memory: {{ .Values.llmAgent.resources.limits.memory | quote }}
+              cpu: {{ .Values.llmAgent.resources.limits.cpu | quote }}
+              {{- if .Values.llmAgent.gpu.enabled }}
+              nvidia.com/gpu: {{ .Values.llmAgent.gpu.count }}
+              {{- end }}
+          livenessProbe:
+            httpGet: { path: /health, port: 8000 }
+            initialDelaySeconds: 120
+            periodSeconds: 30
+          readinessProbe:
+            httpGet: { path: /health, port: 8000 }
+            initialDelaySeconds: 60
+            periodSeconds: 10
+          volumeMounts:
+            - name: model-cache
+              mountPath: {{ .Values.llmAgent.model.cacheDir }}
+  volumeClaimTemplates:
+    - metadata:
+        name: model-cache
+      spec:
+        accessModes: [ReadWriteOnce]
+        {{- if .Values.llmAgent.persistence.storageClass }}
+        storageClassName: {{ .Values.llmAgent.persistence.storageClass }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.llmAgent.persistence.size }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: llm-agent
+  labels: { app: llm-agent }
+spec:
+  selector: { app: llm-agent }
+  ports:
+    - { name: http, port: 8000, targetPort: 8000 }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: llm-agent-headless
+spec:
+  clusterIP: None
+  selector: { app: llm-agent }
+  ports:
+    - { name: http, port: 8000 }
+{{- if .Values.podDisruptionBudget.enabled }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: llm-agent-pdb
+spec:
+  minAvailable: {{ .Values.podDisruptionBudget.minAvailable }}
+  selector:
+    matchLabels: { app: llm-agent }
+{{- end }}
+{{- end }}

@@ -1,0 +1,103 @@
+version: "3.9"
+
+# Local development stack — no Kubernetes needed
+# Usage: docker-compose up --build
+# Open: http://localhost:8000
+
+services:
+
+  # ── Whisper STT ──────────────────────────────────────────────────────────
+  whisper-stt:
+    build:
+      context: ./services/whisper-stt
+      dockerfile: Dockerfile
+    image: voice-platform/whisper-stt:latest
+    ports:
+      - "8001:8001"
+    environment:
+      WHISPER_MODEL_SIZE: base       # tiny for faster startup in dev
+      WHISPER_DEVICE: cpu            # change to cuda if GPU available
+      WHISPER_COMPUTE_TYPE: int8
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    # Uncomment for GPU:
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
+
+  # ── TTS Service ───────────────────────────────────────────────────────────
+  tts-service:
+    build:
+      context: ./services/tts-service
+      dockerfile: Dockerfile
+    image: voice-platform/tts-service:latest
+    ports:
+      - "8002:8002"
+    environment:
+      TTS_VOICE: en-US-JennyNeural
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8002/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  # ── LLM Agent (vLLM in CPU mode for local dev) ───────────────────────────
+  # NOTE: For real GPU inference, use:
+  #   docker run --gpus all -v model-cache:/model-cache \
+  #     vllm/vllm-openai:v0.4.0 --model mistralai/Mistral-7B-Instruct-v0.2
+  #
+  # For local testing without a GPU, you can use Ollama instead:
+  llm-agent:
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama-data:/root/.ollama
+    command: serve
+    # After startup, pull a model:
+    #   docker exec -it ml-inference-gitops-llm-agent-1 ollama pull mistral
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  # ── Voice Gateway ─────────────────────────────────────────────────────────
+  voice-gateway:
+    build:
+      context: ./services/voice-gateway
+      dockerfile: Dockerfile
+    image: voice-platform/voice-gateway:latest
+    ports:
+      - "8000:8000"
+    environment:
+      STT_URL: http://whisper-stt:8001
+      TTS_URL: http://tts-service:8002
+      # For Ollama local dev:
+      LLM_URL: http://llm-agent:11434
+      LLM_MODEL: mistral
+      TTS_VOICE: en-US-JennyNeural
+    depends_on:
+      whisper-stt:
+        condition: service_healthy
+      tts-service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+volumes:
+  ollama-data:

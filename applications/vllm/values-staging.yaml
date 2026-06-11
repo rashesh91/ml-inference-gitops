@@ -1,0 +1,25 @@
+# Staging overrides — 1 GPU, medium model
+replicaCount: 1
+
+model:
+  name: "mistral-7b"
+  huggingfaceId: "mistralai/Mistral-7B-Instruct-v0.2"
+  maxModelLen: 4096
+  gpuMemoryUtilization: 0.85
+
+gpu:
+  count: 1
+
+resources:
+  requests:
+    memory: "16Gi"
+    cpu: "4"
+  limits:
+    memory: "24Gi"
+    cpu: "8"
+
+persistence:
+  enabled: true
+  size: 30Gi
+
+priorityClassName: "gpu-batch-medium"

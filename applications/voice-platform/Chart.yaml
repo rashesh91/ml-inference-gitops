@@ -1,0 +1,7 @@
+apiVersion: v2
+name: voice-platform
+description: Voice Agentic AI Platform — Whisper STT + vLLM Agent + Edge TTS + Gateway
+type: application
+version: 0.2.0
+appVersion: "1.0.0"
+keywords: [voice, ai, llm, stt, tts, agentic]

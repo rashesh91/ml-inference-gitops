@@ -1,0 +1,26 @@
+# App of Apps root — ArgoCD watches this file and bootstraps all other Applications
+# Apply once manually: kubectl apply -f root-app.yaml -n argocd
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: ml-infra-root
+  namespace: argocd
+  labels:
+    tier: root
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: ml-infra
+  source:
+    repoURL: https://github.com/rashesh91/ml-inference-gitops.git
+    targetRevision: HEAD
+    path: argocd-config/apps
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: argocd
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

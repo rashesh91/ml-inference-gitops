@@ -1,0 +1,51 @@
+# NVIDIA GPU Operator Helm values
+# Install: helm repo add nvidia https://helm.ngc.nvidia.com/nvidia
+#          helm install gpu-operator nvidia/gpu-operator -n infra -f values.yaml
+
+operator:
+  defaultRuntime: containerd
+
+driver:
+  enabled: true
+  version: "535.104.05"
+  # Set to false if drivers are pre-installed on nodes
+  # enabled: false
+
+toolkit:
+  enabled: true
+
+devicePlugin:
+  enabled: true
+  config:
+    name: time-slicing-config
+    default: any
+
+# Time-slicing allows multiple pods to share one GPU
+# Useful for development and smaller models
+timeSlicing:
+  enabled: false  # Enable for dev environments sharing GPUs
+  config:
+    default:
+      strategy: none
+      resources:
+        - name: nvidia.com/gpu
+          replicas: 4  # 4 virtual GPUs per physical GPU
+
+dcgmExporter:
+  enabled: true
+  serviceMonitor:
+    enabled: true
+    interval: 15s
+    honorLabels: false
+
+nodeFeatureDiscovery:
+  enabled: true
+
+mig:
+  strategy: none  # Use 'single' or 'mixed' for A100/H100 MIG support
+
+validator:
+  plugin:
+    env:
+      - name: WITH_WORKLOAD
+        value: "true"

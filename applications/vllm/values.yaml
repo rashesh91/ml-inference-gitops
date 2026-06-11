@@ -1,0 +1,94 @@
+# Default values — override per environment in values-dev/staging/prod.yaml
+replicaCount: 1
+
+image:
+  repository: vllm/vllm-openai
+  tag: "v0.4.0"
+  pullPolicy: IfNotPresent
+
+model:
+  name: "llama2-7b"
+  # HuggingFace model ID
+  huggingfaceId: "meta-llama/Llama-2-7b-chat-hf"
+  # Where weights are cached inside the container
+  cacheDir: "/model-cache"
+  # Max model context length
+  maxModelLen: 4096
+  # Tensor parallelism — set to number of GPUs per pod
+  tensorParallelSize: 1
+  # GPU memory utilization (0.0-1.0)
+  gpuMemoryUtilization: 0.90
+  # Quantization: null, "awq", "gptq", "squeezellm"
+  quantization: null
+  # Set dtype: auto, half, bfloat16, float
+  dtype: "auto"
+
+gpu:
+  # Set to 0 for CPU-only mode (dev/testing without GPU)
+  count: 1
+  type: "nvidia.com/gpu"
+
+resources:
+  requests:
+    memory: "16Gi"
+    cpu: "4"
+  limits:
+    memory: "32Gi"
+    cpu: "8"
+
+persistence:
+  enabled: true
+  storageClass: ""
+  accessMode: ReadWriteOnce
+  size: 50Gi
+
+service:
+  type: ClusterIP
+  port: 8000
+  targetPort: 8000
+
+serviceAccount:
+  name: vllm-serving
+
+tolerations:
+  - key: "nvidia.com/gpu"
+    operator: "Exists"
+    effect: "NoSchedule"
+
+nodeSelector:
+  nvidia.com/gpu: "true"
+
+affinity: {}
+
+priorityClassName: "gpu-inference-high"
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+
+livenessProbe:
+  httpGet:
+    path: /health
+    port: 8000
+  initialDelaySeconds: 120
+  periodSeconds: 30
+  failureThreshold: 3
+
+readinessProbe:
+  httpGet:
+    path: /health
+    port: 8000
+  initialDelaySeconds: 60
+  periodSeconds: 10
+  failureThreshold: 5
+
+env:
+  HUGGING_FACE_HUB_TOKEN: ""  # Set via sealed secret
+  VLLM_WORKER_MULTIPROC_METHOD: "spawn"
+
+metrics:
+  enabled: true
+  port: 9090
+  serviceMonitor:
+    enabled: true
+    interval: 30s

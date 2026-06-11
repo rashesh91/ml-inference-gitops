@@ -1,0 +1,28 @@
+# Apply GPU taints to GPU nodes manually, or via node feature discovery
+# kubectl taint nodes <gpu-node-name> nvidia.com/gpu=true:NoSchedule
+# kubectl label nodes <gpu-node-name> nvidia.com/gpu=true gpu-type=t4
+
+# PriorityClass for GPU workloads (apply cluster-wide)
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: gpu-inference-high
+value: 1000
+globalDefault: false
+description: "High priority for production inference serving"
+---
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: gpu-batch-medium
+value: 500
+globalDefault: false
+description: "Medium priority for batch inference jobs"
+---
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: gpu-experiment-low
+value: 100
+globalDefault: false
+description: "Low priority for experiments — evicted first under pressure"

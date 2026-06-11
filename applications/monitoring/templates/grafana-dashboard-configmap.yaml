@@ -1,0 +1,75 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-ml-dashboards
+  namespace: infra
+  labels:
+    grafana_dashboard: "1"
+data:
+  gpu-inference.json: |
+    {
+      "title": "GPU Inference Dashboard",
+      "uid": "gpu-inference",
+      "panels": [
+        {
+          "title": "GPU Utilization %",
+          "type": "stat",
+          "targets": [
+            {
+              "expr": "DCGM_FI_DEV_GPU_UTIL{namespace=~\"gpu-workloads|prod|staging\"}",
+              "legendFormat": "{{pod}} GPU {{gpu}}"
+            }
+          ]
+        },
+        {
+          "title": "GPU Memory Used (MB)",
+          "type": "graph",
+          "targets": [
+            {
+              "expr": "DCGM_FI_DEV_FB_USED{namespace=~\"gpu-workloads|prod|staging\"}",
+              "legendFormat": "{{pod}}"
+            }
+          ]
+        },
+        {
+          "title": "vLLM Requests/sec",
+          "type": "graph",
+          "targets": [
+            {
+              "expr": "rate(vllm:request_success_total[5m])",
+              "legendFormat": "{{model_name}} success/s"
+            }
+          ]
+        },
+        {
+          "title": "vLLM Avg Latency (ms)",
+          "type": "graph",
+          "targets": [
+            {
+              "expr": "histogram_quantile(0.95, rate(vllm:e2e_request_latency_seconds_bucket[5m])) * 1000",
+              "legendFormat": "p95 latency"
+            }
+          ]
+        },
+        {
+          "title": "GPU Temperature (C)",
+          "type": "gauge",
+          "targets": [
+            {
+              "expr": "DCGM_FI_DEV_GPU_TEMP",
+              "legendFormat": "{{pod}}"
+            }
+          ]
+        },
+        {
+          "title": "Pending Inference Requests",
+          "type": "stat",
+          "targets": [
+            {
+              "expr": "vllm:num_requests_waiting",
+              "legendFormat": "{{model_name}}"
+            }
+          ]
+        }
+      ]
+    }

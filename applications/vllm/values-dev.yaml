@@ -1,0 +1,30 @@
+# Dev overrides — CPU-only, small model, no persistence
+replicaCount: 1
+
+model:
+  name: "tinyllama"
+  huggingfaceId: "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
+  maxModelLen: 2048
+  gpuMemoryUtilization: 0.80
+  dtype: "float16"
+
+gpu:
+  count: 0  # CPU-only mode
+
+resources:
+  requests:
+    memory: "4Gi"
+    cpu: "2"
+  limits:
+    memory: "8Gi"
+    cpu: "4"
+
+persistence:
+  enabled: false
+
+tolerations: []
+nodeSelector: {}
+priorityClassName: "gpu-experiment-low"
+
+podDisruptionBudget:
+  enabled: false

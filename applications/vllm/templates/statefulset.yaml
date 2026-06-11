@@ -1,0 +1,156 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "vllm-serving.fullname" . }}
+  labels:
+    {{- include "vllm-serving.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "vllm-serving.selectorLabels" . | nindent 6 }}
+  serviceName: {{ include "vllm-serving.fullname" . }}-headless
+  podManagementPolicy: Parallel
+  template:
+    metadata:
+      labels:
+        {{- include "vllm-serving.selectorLabels" . | nindent 8 }}
+      annotations:
+        prometheus.io/scrape: "{{ .Values.metrics.enabled }}"
+        prometheus.io/port: "{{ .Values.metrics.port }}"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: {{ .Values.serviceAccount.name }}
+      {{- if .Values.priorityClassName }}
+      priorityClassName: {{ .Values.priorityClassName }}
+      {{- end }}
+      tolerations:
+        {{- toYaml .Values.tolerations | nindent 8 }}
+      {{- if .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml .Values.nodeSelector | nindent 8 }}
+      {{- end }}
+      {{- if .Values.affinity }}
+      affinity:
+        {{- toYaml .Values.affinity | nindent 8 }}
+      {{- end }}
+      initContainers:
+        - name: model-downloader
+          image: python:3.11-slim
+          command:
+            - /bin/sh
+            - -c
+            - |
+              pip install -q huggingface-hub && \
+              python -c "
+              from huggingface_hub import snapshot_download
+              import os
+              token = os.environ.get('HUGGING_FACE_HUB_TOKEN', '')
+              snapshot_download(
+                  repo_id='{{ .Values.model.huggingfaceId }}',
+                  local_dir='{{ .Values.model.cacheDir }}/{{ .Values.model.name }}',
+                  token=token if token else None,
+                  ignore_patterns=['*.bin']
+              )
+              print('Model download complete')
+              "
+          env:
+            - name: HUGGING_FACE_HUB_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: hf-token
+                  key: token
+                  optional: true
+          volumeMounts:
+            - name: model-cache
+              mountPath: {{ .Values.model.cacheDir }}
+          resources:
+            requests:
+              memory: "2Gi"
+              cpu: "1"
+            limits:
+              memory: "4Gi"
+              cpu: "2"
+      containers:
+        - name: vllm
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command:
+            - python
+            - -m
+            - vllm.entrypoints.openai.api_server
+            - --model={{ .Values.model.cacheDir }}/{{ .Values.model.name }}
+            - --max-model-len={{ .Values.model.maxModelLen }}
+            - --tensor-parallel-size={{ .Values.model.tensorParallelSize }}
+            - --gpu-memory-utilization={{ .Values.model.gpuMemoryUtilization }}
+            - --dtype={{ .Values.model.dtype }}
+            - --host=0.0.0.0
+            - --port=8000
+            {{- if .Values.model.quantization }}
+            - --quantization={{ .Values.model.quantization }}
+            {{- end }}
+            {{- if eq (int .Values.gpu.count) 0 }}
+            - --device=cpu
+            {{- end }}
+          ports:
+            - containerPort: 8000
+              name: http
+              protocol: TCP
+            {{- if .Values.metrics.enabled }}
+            - containerPort: {{ .Values.metrics.port }}
+              name: metrics
+              protocol: TCP
+            {{- end }}
+          env:
+            - name: HUGGING_FACE_HUB_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: hf-token
+                  key: token
+                  optional: true
+            - name: VLLM_WORKER_MULTIPROC_METHOD
+              value: {{ .Values.env.VLLM_WORKER_MULTIPROC_METHOD | quote }}
+          resources:
+            requests:
+              memory: {{ .Values.resources.requests.memory | quote }}
+              cpu: {{ .Values.resources.requests.cpu | quote }}
+              {{- if gt (int .Values.gpu.count) 0 }}
+              {{ .Values.gpu.type }}: {{ .Values.gpu.count }}
+              {{- end }}
+            limits:
+              memory: {{ .Values.resources.limits.memory | quote }}
+              cpu: {{ .Values.resources.limits.cpu | quote }}
+              {{- if gt (int .Values.gpu.count) 0 }}
+              {{ .Values.gpu.type }}: {{ .Values.gpu.count }}
+              {{- end }}
+          livenessProbe:
+            {{- toYaml .Values.livenessProbe | nindent 12 }}
+          readinessProbe:
+            {{- toYaml .Values.readinessProbe | nindent 12 }}
+          volumeMounts:
+            - name: model-cache
+              mountPath: {{ .Values.model.cacheDir }}
+  volumeClaimTemplates:
+    {{- if .Values.persistence.enabled }}
+    - metadata:
+        name: model-cache
+      spec:
+        accessModes:
+          - {{ .Values.persistence.accessMode }}
+        {{- if .Values.persistence.storageClass }}
+        storageClassName: {{ .Values.persistence.storageClass }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.persistence.size }}
+    {{- else }}
+    - metadata:
+        name: model-cache
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        resources:
+          requests:
+            storage: 1Gi
+        storageClassName: standard
+    {{- end }}

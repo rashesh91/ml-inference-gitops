@@ -1,0 +1,59 @@
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: ml-infra
+  namespace: argocd
+spec:
+  description: ML inference infrastructure — GPU operator, namespaces, RBAC
+  sourceRepos:
+    - https://github.com/rashesh91/ml-inference-gitops.git
+    - https://helm.ngc.nvidia.com/nvidia
+    - https://prometheus-community.github.io/helm-charts
+  destinations:
+    - namespace: infra
+      server: https://kubernetes.default.svc
+    - namespace: argocd
+      server: https://kubernetes.default.svc
+  clusterResourceWhitelist:
+    - group: ""
+      kind: Namespace
+    - group: rbac.authorization.k8s.io
+      kind: ClusterRole
+    - group: rbac.authorization.k8s.io
+      kind: ClusterRoleBinding
+    - group: scheduling.k8s.io
+      kind: PriorityClass
+    - group: apiextensions.k8s.io
+      kind: CustomResourceDefinition
+  namespaceResourceWhitelist:
+    - group: "*"
+      kind: "*"
+---
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: ml-applications
+  namespace: argocd
+spec:
+  description: ML model serving applications per environment
+  sourceRepos:
+    - https://github.com/rashesh91/ml-inference-gitops.git
+  destinations:
+    - namespace: dev
+      server: https://kubernetes.default.svc
+    - namespace: staging
+      server: https://kubernetes.default.svc
+    - namespace: prod
+      server: https://kubernetes.default.svc
+    - namespace: gpu-workloads
+      server: https://kubernetes.default.svc
+  namespaceResourceWhitelist:
+    - group: "*"
+      kind: "*"
+  roles:
+    - name: prod-deployer
+      description: Can sync production applications
+      policies:
+        - p, proj:ml-applications:prod-deployer, applications, sync, ml-applications/vllm-prod, allow
+      groups:
+        - ml-infra-leads

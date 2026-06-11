@@ -1,0 +1,62 @@
+# Wave 3 — vLLM model serving, multi-environment via ApplicationSet
+# ApplicationSet generates one Application per environment
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: vllm-environments
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "3"
+spec:
+  generators:
+    - list:
+        elements:
+          - env: dev
+            namespace: dev
+            valuesFile: values-dev.yaml
+            autoSync: "true"
+            prune: "true"
+          - env: staging
+            namespace: staging
+            valuesFile: values-staging.yaml
+            autoSync: "false"
+            prune: "false"
+          - env: prod
+            namespace: prod
+            valuesFile: values-prod.yaml
+            autoSync: "false"
+            prune: "false"
+  template:
+    metadata:
+      name: "vllm-{{env}}"
+      namespace: argocd
+      labels:
+        environment: "{{env}}"
+        app: vllm
+      finalizers:
+        - resources-finalizer.argocd.argoproj.io
+    spec:
+      project: ml-applications
+      source:
+        repoURL: https://github.com/rashesh91/ml-inference-gitops.git
+        targetRevision: HEAD
+        path: applications/vllm
+        helm:
+          releaseName: "vllm-{{env}}"
+          valueFiles:
+            - values.yaml
+            - "{{valuesFile}}"
+      destination:
+        server: https://kubernetes.default.svc
+        namespace: "{{namespace}}"
+      syncPolicy:
+        automated:
+          prune: false
+          selfHeal: false
+        syncOptions:
+          - CreateNamespace=false  # Namespaces created in wave 0
+      ignoreDifferences:
+        - group: apps
+          kind: StatefulSet
+          jsonPointers:
+            - /spec/volumeClaimTemplates

@@ -1,0 +1,52 @@
+{{- if .Values.ttsService.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tts-service
+  labels:
+    app: tts-service
+    component: tts
+spec:
+  replicas: {{ .Values.ttsService.replicas }}
+  selector:
+    matchLabels: { app: tts-service }
+  template:
+    metadata:
+      labels: { app: tts-service, component: tts }
+    spec:
+      serviceAccountName: {{ .Values.serviceAccount.name }}
+      containers:
+        - name: tts-service
+          image: "{{ .Values.global.imageRegistry }}{{ .Values.ttsService.image }}"
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          ports:
+            - { containerPort: 8002, name: http }
+          env:
+            - name: TTS_VOICE
+              value: {{ .Values.ttsService.voice | quote }}
+          resources:
+            requests:
+              memory: {{ .Values.ttsService.resources.requests.memory | quote }}
+              cpu: {{ .Values.ttsService.resources.requests.cpu | quote }}
+            limits:
+              memory: {{ .Values.ttsService.resources.limits.memory | quote }}
+              cpu: {{ .Values.ttsService.resources.limits.cpu | quote }}
+          livenessProbe:
+            httpGet: { path: /health, port: 8002 }
+            initialDelaySeconds: 15
+            periodSeconds: 30
+          readinessProbe:
+            httpGet: { path: /health, port: 8002 }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: tts-service
+  labels: { app: tts-service }
+spec:
+  selector: { app: tts-service }
+  ports:
+    - { name: http, port: 8002, targetPort: 8002 }
+{{- end }}

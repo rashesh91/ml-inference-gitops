@@ -1,0 +1,84 @@
+global:
+  imageRegistry: ""   # e.g. "docker.io/yourorg/" — leave empty for local builds
+  imagePullPolicy: IfNotPresent
+
+# ── Whisper STT ──────────────────────────────────────────────────────────────
+whisperStt:
+  enabled: true
+  image: voice-platform/whisper-stt:latest
+  replicas: 1
+  gpu:
+    enabled: true
+    count: 1
+  model:
+    size: base          # tiny | base | small | medium | large-v3
+    device: auto        # auto | cuda | cpu
+    computeType: float16 # float16 (GPU) | int8 (CPU)
+  resources:
+    requests: { memory: "4Gi", cpu: "2" }
+    limits:   { memory: "8Gi", cpu: "4" }
+  tolerations:
+    - { key: nvidia.com/gpu, operator: Exists, effect: NoSchedule }
+  nodeSelector:
+    nvidia.com/gpu: "true"
+
+# ── LLM Agent (vLLM) ─────────────────────────────────────────────────────────
+llmAgent:
+  enabled: true
+  image: vllm/vllm-openai:v0.4.0
+  replicas: 1
+  gpu:
+    enabled: true
+    count: 1
+  model:
+    name: mistral-7b
+    huggingfaceId: mistralai/Mistral-7B-Instruct-v0.2
+    cacheDir: /model-cache
+    maxModelLen: 4096
+    gpuMemoryUtilization: 0.90
+    dtype: bfloat16
+  resources:
+    requests: { memory: "16Gi", cpu: "4" }
+    limits:   { memory: "24Gi", cpu: "8" }
+  persistence:
+    enabled: true
+    size: 30Gi
+    storageClass: ""
+  tolerations:
+    - { key: nvidia.com/gpu, operator: Exists, effect: NoSchedule }
+  nodeSelector:
+    nvidia.com/gpu: "true"
+
+# ── TTS Service (edge-tts, no GPU) ───────────────────────────────────────────
+ttsService:
+  enabled: true
+  image: voice-platform/tts-service:latest
+  replicas: 2
+  voice: en-US-JennyNeural
+  resources:
+    requests: { memory: "256Mi", cpu: "250m" }
+    limits:   { memory: "512Mi", cpu: "500m" }
+
+# ── Voice Gateway (orchestrator + frontend) ───────────────────────────────────
+voiceGateway:
+  enabled: true
+  image: voice-platform/voice-gateway:latest
+  replicas: 2
+  resources:
+    requests: { memory: "512Mi", cpu: "500m" }
+    limits:   { memory: "1Gi",   cpu: "1" }
+  ingress:
+    enabled: true
+    className: nginx
+    host: voice.example.com
+    tlsSecret: voice-tls
+
+# ── Shared ────────────────────────────────────────────────────────────────────
+serviceAccount:
+  name: voice-platform
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+
+priorityClassName: gpu-inference-high
