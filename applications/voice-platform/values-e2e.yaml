@@ -35,7 +35,7 @@ llmAgent:
     requests: { memory: "8Gi", cpu: "2" }
     limits:   { memory: "20Gi", cpu: "4" }
   persistence:
-    size: 30Gi
+    size: 10Gi
   tolerations:
     - { key: nvidia.com/gpu, operator: Exists, effect: NoSchedule }
   nodeSelector:

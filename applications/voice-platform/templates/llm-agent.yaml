@@ -97,8 +97,6 @@ metadata:
   labels:
     app: llm-agent
     component: llm
-  annotations:
-    argocd.argoproj.io/sync-options: Replace=true
 spec:
   replicas: {{ .Values.llmAgent.replicas }}
   selector:
