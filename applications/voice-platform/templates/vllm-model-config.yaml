@@ -1,0 +1,58 @@
+{{- if eq .Values.llmAgent.backend "vllm" }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: vllm-model-config
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/managed-by: argocd
+data:
+  model_source: "huggingface"
+  huggingface_id: {{ .Values.llmAgent.model.huggingfaceId | quote }}
+  minio_bucket: "models"
+  minio_path: ""
+  model_name: {{ .Values.llmAgent.model.name | quote }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: minio-credentials
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/managed-by: argocd
+type: Opaque
+stringData:
+  endpoint: {{ .Values.minio.endpoint | quote }}
+  access_key: {{ .Values.minio.accessKey | quote }}
+  secret_key: {{ .Values.minio.secretKey | quote }}
+---
+# Allow ml-training-sa (ml-training namespace) to update ConfigMap + restart StatefulSet
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: vllm-publisher
+  namespace: {{ .Release.Namespace }}
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    resourceNames: ["vllm-model-config"]
+    verbs: ["get", "update", "patch"]
+  - apiGroups: ["apps"]
+    resources: ["statefulsets"]
+    resourceNames: ["llm-agent"]
+    verbs: ["get", "update", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: ml-training-vllm-publisher
+  namespace: {{ .Release.Namespace }}
+subjects:
+  - kind: ServiceAccount
+    name: ml-training-sa
+    namespace: ml-training
+roleRef:
+  kind: Role
+  name: vllm-publisher
+  apiGroup: rbac.authorization.k8s.io
+{{- end }}

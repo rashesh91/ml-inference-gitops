@@ -88,3 +88,9 @@ priorityClassName: gpu-inference-high
 
 monitoring:
   enabled: false   # set true when prometheus-operator is installed
+
+# ── MinIO (vLLM model download from fine-tuning pipeline) ────────────────────
+minio:
+  endpoint: ""
+  accessKey: ""
+  secretKey: ""

@@ -117,6 +117,9 @@ spec:
       {{- if .Values.llmAgent.nodeSelector }}
       nodeSelector: {{- toYaml .Values.llmAgent.nodeSelector | nindent 8 }}
       {{- end }}
+      {{- if .Values.llmAgent.gpu.enabled }}
+      runtimeClassName: nvidia
+      {{- end }}
       initContainers:
         - name: model-downloader
           image: python:3.11-slim
@@ -124,38 +127,104 @@ spec:
             - /bin/sh
             - -c
             - |
-              pip install -q huggingface-hub && \
-              python -c "
-              from huggingface_hub import snapshot_download
-              import os
-              token = os.environ.get('HUGGING_FACE_HUB_TOKEN', '')
-              snapshot_download(
-                  repo_id='{{ .Values.llmAgent.model.huggingfaceId }}',
-                  local_dir='{{ .Values.llmAgent.model.cacheDir }}/{{ .Values.llmAgent.model.name }}',
-                  token=token if token else None,
-                  ignore_patterns=['*.bin'],
-              )
-              print('Model ready')
-              "
+              pip install -q boto3 huggingface-hub && python3 << 'PYEOF'
+              import os, sys, shutil
+
+              model_source = os.environ.get('model_source', 'huggingface')
+              hf_id = os.environ.get('huggingface_id', '{{ .Values.llmAgent.model.huggingfaceId }}')
+              minio_bucket = os.environ.get('minio_bucket', 'models')
+              minio_path = os.environ.get('minio_path', '')
+              cache_dir = '{{ .Values.llmAgent.model.cacheDir }}/current'
+              marker = '{{ .Values.llmAgent.model.cacheDir }}/.download-marker'
+
+              # Skip if already cached with same source
+              source_key = f"{model_source}:{minio_path or hf_id}"
+              if os.path.exists(marker) and os.path.exists(f'{cache_dir}/config.json'):
+                  with open(marker) as f:
+                      if f.read().strip() == source_key:
+                          print(f"Model already cached: {source_key}")
+                          sys.exit(0)
+
+              os.makedirs(cache_dir, exist_ok=True)
+
+              if model_source == 'minio' and minio_path:
+                  import boto3
+                  from botocore.client import Config
+                  s3 = boto3.client('s3',
+                      endpoint_url=os.environ['MINIO_ENDPOINT'],
+                      aws_access_key_id=os.environ['MINIO_ACCESS_KEY'],
+                      aws_secret_access_key=os.environ['MINIO_SECRET_KEY'],
+                      config=Config(signature_version='s3v4'),
+                      region_name='us-east-1')
+                  resp = s3.list_objects_v2(Bucket=minio_bucket, Prefix=minio_path)
+                  objects = resp.get('Contents', [])
+                  if objects:
+                      if os.path.exists(cache_dir):
+                          shutil.rmtree(cache_dir)
+                      os.makedirs(cache_dir, exist_ok=True)
+                      for obj in objects:
+                          key = obj['Key']
+                          fname = key[len(minio_path):].lstrip('/')
+                          if fname:
+                              fdir = os.path.dirname(f'{cache_dir}/{fname}')
+                              if fdir:
+                                  os.makedirs(fdir, exist_ok=True)
+                              s3.download_file(minio_bucket, key, f'{cache_dir}/{fname}')
+                          print(f"Downloaded: {fname}")
+                      print(f"Fine-tuned model loaded from MinIO: {minio_bucket}/{minio_path}")
+                  else:
+                      print(f"No model at {minio_bucket}/{minio_path}, falling back to HuggingFace")
+                      model_source = 'huggingface'
+
+              if model_source != 'minio' or not minio_path:
+                  from huggingface_hub import snapshot_download
+                  if os.path.exists(cache_dir):
+                      shutil.rmtree(cache_dir)
+                  token = os.environ.get('HF_TOKEN', '')
+                  snapshot_download(
+                      repo_id=hf_id,
+                      local_dir=cache_dir,
+                      token=token if token else None,
+                      ignore_patterns=['*.bin', '*.msgpack', '*.h5'],
+                  )
+                  print(f"Base model downloaded from HuggingFace: {hf_id}")
+
+              with open(marker, 'w') as f:
+                  f.write(source_key)
+              print("Model ready at", cache_dir)
+              PYEOF
+          envFrom:
+            - configMapRef:
+                name: vllm-model-config
+                optional: true
           env:
-            - name: HUGGING_FACE_HUB_TOKEN
+            - name: MINIO_ENDPOINT
+              valueFrom:
+                secretKeyRef: { name: minio-credentials, key: endpoint, optional: true }
+            - name: MINIO_ACCESS_KEY
+              valueFrom:
+                secretKeyRef: { name: minio-credentials, key: access_key, optional: true }
+            - name: MINIO_SECRET_KEY
+              valueFrom:
+                secretKeyRef: { name: minio-credentials, key: secret_key, optional: true }
+            - name: HF_TOKEN
               valueFrom:
                 secretKeyRef: { name: hf-token, key: token, optional: true }
           volumeMounts:
             - name: model-cache
               mountPath: {{ .Values.llmAgent.model.cacheDir }}
           resources:
-            requests: { memory: "2Gi", cpu: "1" }
-            limits:   { memory: "4Gi", cpu: "2" }
+            requests: { memory: "4Gi", cpu: "2" }
+            limits:   { memory: "8Gi", cpu: "4" }
       containers:
         - name: vllm
           image: "{{ .Values.llmAgent.image }}"
-          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          imagePullPolicy: {{ .Values.llmAgent.imagePullPolicy | default .Values.global.imagePullPolicy }}
           command:
             - python
             - -m
             - vllm.entrypoints.openai.api_server
-            - --model={{ .Values.llmAgent.model.cacheDir }}/{{ .Values.llmAgent.model.name }}
+            - --model={{ .Values.llmAgent.model.cacheDir }}/current
             - --max-model-len={{ .Values.llmAgent.model.maxModelLen }}
             - --gpu-memory-utilization={{ .Values.llmAgent.model.gpuMemoryUtilization }}
             - --dtype={{ .Values.llmAgent.model.dtype }}

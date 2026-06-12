@@ -1,12 +1,11 @@
-# E2E single-node GPU deployment — E2E Networks L4 server
-# Images are pre-loaded into k3s containerd, so imagePullPolicy: Never
+# E2E single-node GPU deployment
 global:
   imageRegistry: ""
-  imagePullPolicy: Never
+  imagePullPolicy: Never   # custom images only; vLLM uses its own pullPolicy below
 
 whisperStt:
   gpu:
-    enabled: false       # only 1 GPU on node — reserve it for LLM
+    enabled: false
   model:
     size: small
     device: cpu
@@ -18,16 +17,33 @@ whisperStt:
   nodeSelector: {}
 
 llmAgent:
-  backend: ollama
-  port: 11434
+  backend: vllm
+  port: 8000
+  imagePullPolicy: IfNotPresent
+  gpu:
+    enabled: true
+    count: 1
   model:
-    name: "mistral:latest"   # must match ollama tag for LLM_MODEL env var
-    ollamaModel: mistral
+    name: "assistant"
+    huggingfaceId: "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
+    cacheDir: /model-cache
+    maxModelLen: 2048
+    gpuMemoryUtilization: 0.85
+    dtype: "float16"
   resources:
     requests: { memory: "8Gi", cpu: "2" }
-    limits:   { memory: "16Gi", cpu: "4" }
+    limits:   { memory: "20Gi", cpu: "4" }
   persistence:
-    size: 10Gi
+    size: 30Gi
+  tolerations:
+    - { key: nvidia.com/gpu, operator: Exists, effect: NoSchedule }
+  nodeSelector:
+    nvidia.com/gpu: "true"
+
+minio:
+  endpoint: "http://minio.ml-training.svc.cluster.local:9000"
+  accessKey: "minioadmin"
+  secretKey: "minioadmin"
 
 ttsService:
   replicas: 1
