@@ -21,6 +21,7 @@ llmAgent:
   backend: ollama
   port: 11434
   model:
+    name: "mistral:latest"   # must match ollama tag for LLM_MODEL env var
     ollamaModel: mistral
   resources:
     requests: { memory: "8Gi", cpu: "2" }
