@@ -16,22 +16,21 @@ services:
       - "8001:8001"
     environment:
       WHISPER_MODEL_SIZE: small      # better accuracy for Indian languages
-      WHISPER_DEVICE: cpu            # change to cuda if GPU available
-      WHISPER_COMPUTE_TYPE: int8
+      WHISPER_DEVICE: cuda           # set to cpu if no GPU available
+      WHISPER_COMPUTE_TYPE: float16
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
       interval: 30s
       timeout: 10s
       retries: 5
       start_period: 60s
-    # Uncomment for GPU:
-    # deploy:
-    #   resources:
-    #     reservations:
-    #       devices:
-    #         - driver: nvidia
-    #           count: 1
-    #           capabilities: [gpu]
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
 
   # ── TTS Service ───────────────────────────────────────────────────────────
   tts-service:
