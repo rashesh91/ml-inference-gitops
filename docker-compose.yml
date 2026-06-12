@@ -15,7 +15,7 @@ services:
     ports:
       - "8001:8001"
     environment:
-      WHISPER_MODEL_SIZE: base       # tiny for faster startup in dev
+      WHISPER_MODEL_SIZE: small      # better accuracy for Indian languages
       WHISPER_DEVICE: cpu            # change to cuda if GPU available
       WHISPER_COMPUTE_TYPE: int8
     healthcheck:
@@ -66,7 +66,7 @@ services:
     # After startup, pull a model:
     #   docker exec -it ml-inference-gitops-llm-agent-1 ollama pull mistral
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
+      test: ["CMD", "ollama", "list"]
       interval: 30s
       timeout: 10s
       retries: 5

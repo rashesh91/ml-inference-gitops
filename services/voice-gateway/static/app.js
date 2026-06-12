@@ -1,7 +1,7 @@
 /* Voice AI Agent — Frontend */
 'use strict';
 
-const SESSION_ID = crypto.randomUUID();
+const SESSION_ID = (crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2) + Date.now().toString(36));
 const WS_URL     = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws/${SESSION_ID}`;
 
 // ── State ────────────────────────────────────────────────────────────────────
@@ -153,17 +153,43 @@ async function sendAudioBlob(blob) {
 textSend.addEventListener('click', sendText);
 textInput.addEventListener('keydown', e => { if (e.key === 'Enter') sendText(); });
 
-function sendText() {
+async function sendText() {
   const text = textInput.value.trim();
-  if (!text || isBusy || !ws || ws.readyState !== WebSocket.OPEN) return;
+  if (!text || isBusy) return;
   textInput.value = '';
   appendMessage('user', text);
-  ws.send(JSON.stringify({ type: 'text', text }));
   isBusy = true;
   micBtn.disabled = true;
   connDot.className = 'status-dot busy';
   setStatus('Thinking…');
   showThinking();
+
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ type: 'text', text }));
+    return;
+  }
+
+  // REST fallback when WebSocket is not available
+  try {
+    const resp = await fetch('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text }),
+    });
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const data = await resp.json();
+    removeThinking();
+    appendMessage('agent', data.answer);
+    if (data.audio_b64) playAudioB64(data.audio_b64);
+  } catch (e) {
+    removeThinking();
+    appendMessage('agent', `⚠️ Error: ${e.message}`);
+  } finally {
+    isBusy = false;
+    micBtn.disabled = false;
+    connDot.className = ws && ws.readyState === WebSocket.OPEN ? 'status-dot' : 'status-dot offline';
+    setStatus('Ready');
+  }
 }
 
 // ── Audio playback ────────────────────────────────────────────────────────────

@@ -1,11 +1,9 @@
-FROM nvidia/cuda:12.2.2-cudnn8-runtime-ubuntu22.04
+FROM python:3.11-slim
 
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    python3.11 python3.11-dev python3-pip ffmpeg libsndfile1 \
+    ffmpeg libsndfile1 curl \
     && rm -rf /var/lib/apt/lists/*
-
-RUN ln -sf python3.11 /usr/bin/python3 && ln -sf python3.11 /usr/bin/python
 
 WORKDIR /app
 COPY requirements.txt .

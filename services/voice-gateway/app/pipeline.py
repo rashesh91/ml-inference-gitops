@@ -60,12 +60,15 @@ async def process_voice_turn(
     Full voice turn pipeline.
     on_event(event_type, data) is called for progress updates sent over WebSocket.
     """
+    async def emit(event_type: str, data: dict) -> None:
+        if on_event:
+            await on_event(event_type, data)
+
     with _tracer.start_as_current_span("voice-gateway.process_turn") as root_span:
         root_span.set_attribute("session.id", session.session_id)
 
     # ── Step 1: Speech-to-Text ──────────────────────────────────────────────
-    if on_event:
-        on_event("status", {"message": "Transcribing your speech..."})
+    await emit("status", {"message": "Transcribing your speech..."})
 
     with _tracer.start_as_current_span("stt.transcribe") as stt_span:
         stt_span.set_attribute("audio.size_bytes", len(audio_bytes))
@@ -73,8 +76,7 @@ async def process_voice_turn(
         stt_span.set_attribute("transcript.length", len(transcript))
     log.info(f"[{session.session_id}] Transcript: '{transcript}'")
 
-    if on_event:
-        on_event("transcript", {"text": transcript})
+    await emit("transcript", {"text": transcript})
 
     if not transcript.strip():
         return PipelineResult(
@@ -85,19 +87,16 @@ async def process_voice_turn(
         )
 
     # ── Step 2: LLM Agent ───────────────────────────────────────────────────
-    if on_event:
-        on_event("status", {"message": "Thinking..."})
+    await emit("status", {"message": "Thinking..."})
 
     tool_calls: list[dict] = []
 
-    def handle_agent_event(evt: AgentEvent):
+    async def handle_agent_event(evt: AgentEvent):
         if evt.type == "tool_call":
-            if on_event:
-                on_event("tool_call", evt.data)
+            await emit("tool_call", evt.data)
         elif evt.type == "tool_result":
             tool_calls.append(evt.data)
-            if on_event:
-                on_event("tool_result", evt.data)
+            await emit("tool_result", evt.data)
 
     with _tracer.start_as_current_span("agent.react_loop") as agent_span:
         agent_span.set_attribute("model", settings.llm_model)
@@ -111,16 +110,14 @@ async def process_voice_turn(
     log.info(f"[{session.session_id}] Answer: '{answer}'")
 
     # ── Step 3: Text-to-Speech ──────────────────────────────────────────────
-    if on_event:
-        on_event("status", {"message": "Generating speech..."})
+    await emit("status", {"message": "Generating speech..."})
 
     with _tracer.start_as_current_span("tts.synthesize") as tts_span:
         tts_span.set_attribute("text.length", len(answer))
         tts_span.set_attribute("voice", settings.tts_voice)
         audio_b64 = await _synthesize(answer)
         tts_span.set_attribute("audio_b64.length", len(audio_b64))
-    if on_event:
-        on_event("response", {"text": answer})
+    await emit("response", {"text": answer})
 
     # Update session history
     session.add_turn(transcript, answer)
