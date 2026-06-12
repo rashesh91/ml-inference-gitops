@@ -18,6 +18,9 @@ spec:
       labels: { app: llm-agent, component: llm }
     spec:
       serviceAccountName: {{ .Values.serviceAccount.name }}
+      {{- if .Values.llmAgent.gpu.enabled }}
+      runtimeClassName: nvidia
+      {{- end }}
       {{- if .Values.llmAgent.tolerations }}
       tolerations: {{- toYaml .Values.llmAgent.tolerations | nindent 8 }}
       {{- end }}
