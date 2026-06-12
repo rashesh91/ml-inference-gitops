@@ -102,7 +102,7 @@ spec:
   selector:
     matchLabels: { app: llm-agent }
   serviceName: llm-agent-headless
-  podManagementPolicy: Parallel
+  podManagementPolicy: OrderedReady
   template:
     metadata:
       labels: { app: llm-agent, component: llm }
