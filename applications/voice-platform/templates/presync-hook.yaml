@@ -1,0 +1,75 @@
+{{- if eq .Values.llmAgent.backend "vllm" }}
+# Deletes llm-agent StatefulSet when migrating from Ollama → vLLM.
+# Runs before every sync but only takes action if the image is still Ollama.
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: sts-migrator
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    argocd.argoproj.io/hook: PreSync
+    argocd.argoproj.io/hook-delete-policy: HookSucceeded
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: sts-migrator
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    argocd.argoproj.io/hook: PreSync
+    argocd.argoproj.io/hook-delete-policy: HookSucceeded
+rules:
+  - apiGroups: [apps]
+    resources: [statefulsets]
+    verbs: [get, delete]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: sts-migrator
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    argocd.argoproj.io/hook: PreSync
+    argocd.argoproj.io/hook-delete-policy: HookSucceeded
+subjects:
+  - kind: ServiceAccount
+    name: sts-migrator
+    namespace: {{ .Release.Namespace }}
+roleRef:
+  kind: Role
+  name: sts-migrator
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: migrate-llm-agent-sts
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    argocd.argoproj.io/hook: PreSync
+    argocd.argoproj.io/hook-delete-policy: HookSucceeded
+spec:
+  ttlSecondsAfterFinished: 120
+  template:
+    spec:
+      serviceAccountName: sts-migrator
+      restartPolicy: Never
+      containers:
+        - name: migrate
+          image: bitnami/kubectl:latest
+          imagePullPolicy: IfNotPresent
+          command:
+            - /bin/sh
+            - -c
+            - |
+              CURRENT=$(kubectl get statefulset llm-agent -n {{ .Release.Namespace }} \
+                -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null || echo "")
+              if echo "$CURRENT" | grep -qi "ollama"; then
+                echo "Ollama StatefulSet detected ($CURRENT) — deleting for vLLM migration"
+                kubectl delete statefulset llm-agent -n {{ .Release.Namespace }} --ignore-not-found
+                echo "Deleted. ArgoCD will recreate as vLLM."
+              else
+                echo "StatefulSet image=$CURRENT — no migration needed"
+              fi
+{{- end }}
