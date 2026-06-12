@@ -1,6 +1,6 @@
 # GPU build: CUDA 12.2 + cuDNN 8 runtime (libcublas.so.12 included)
 # Falls back gracefully to CPU if no GPU is present via WHISPER_DEVICE env var
-FROM nvidia/cuda:12.2.0-cudnn8-runtime-ubuntu22.04
+FROM nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
