@@ -11,8 +11,8 @@ whisperStt:
     enabled: true
     count: 1
   model:
-    size: base          # tiny | base | small | medium | large-v3
-    device: auto        # auto | cuda | cpu
+    size: small         # tiny | base | small | medium | large-v3
+    device: cuda        # cuda | cpu
     computeType: float16 # float16 (GPU) | int8 (CPU)
   resources:
     requests: { memory: "4Gi", cpu: "2" }
@@ -22,9 +22,11 @@ whisperStt:
   nodeSelector:
     nvidia.com/gpu: "true"
 
-# ── LLM Agent (vLLM) ─────────────────────────────────────────────────────────
+# ── LLM Agent — supports ollama or vllm backend ───────────────────────────────
 llmAgent:
   enabled: true
+  backend: vllm          # ollama | vllm
+  port: 8000             # 11434 for ollama, 8000 for vllm
   image: vllm/vllm-openai:v0.4.0
   replicas: 1
   gpu:
@@ -32,6 +34,7 @@ llmAgent:
     count: 1
   model:
     name: mistral-7b
+    ollamaModel: mistral  # used when backend=ollama
     huggingfaceId: mistralai/Mistral-7B-Instruct-v0.2
     cacheDir: /model-cache
     maxModelLen: 4096
@@ -49,7 +52,7 @@ llmAgent:
   nodeSelector:
     nvidia.com/gpu: "true"
 
-# ── TTS Service (edge-tts, no GPU) ───────────────────────────────────────────
+# ── TTS Service (gTTS, no GPU) ────────────────────────────────────────────────
 ttsService:
   enabled: true
   image: voice-platform/tts-service:latest
@@ -82,3 +85,6 @@ podDisruptionBudget:
   minAvailable: 1
 
 priorityClassName: gpu-inference-high
+
+monitoring:
+  enabled: false   # set true when prometheus-operator is installed

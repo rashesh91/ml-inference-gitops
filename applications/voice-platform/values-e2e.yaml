@@ -1,0 +1,42 @@
+# E2E single-node GPU deployment — E2E Networks L4 server
+# Images are pre-loaded into k3s containerd, so imagePullPolicy: Never
+global:
+  imageRegistry: ""
+  imagePullPolicy: Never
+
+whisperStt:
+  model:
+    size: small
+    device: cuda
+    computeType: float16
+  resources:
+    requests: { memory: "2Gi", cpu: "1" }
+    limits:   { memory: "6Gi", cpu: "4" }
+
+llmAgent:
+  backend: ollama
+  port: 11434
+  model:
+    ollamaModel: mistral
+  resources:
+    requests: { memory: "8Gi", cpu: "2" }
+    limits:   { memory: "16Gi", cpu: "4" }
+  persistence:
+    size: 10Gi
+
+ttsService:
+  replicas: 1
+
+voiceGateway:
+  replicas: 1
+  ingress:
+    host: aitest.lintel.in
+    tlsSecret: aitest-tls
+
+podDisruptionBudget:
+  enabled: false
+
+priorityClassName: ""
+
+monitoring:
+  enabled: false

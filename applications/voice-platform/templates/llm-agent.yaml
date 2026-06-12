@@ -1,4 +1,92 @@
 {{- if .Values.llmAgent.enabled }}
+{{- if eq .Values.llmAgent.backend "ollama" }}
+# ── Ollama backend ────────────────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: llm-agent
+  labels:
+    app: llm-agent
+    component: llm
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: llm-agent }
+  serviceName: llm-agent-headless
+  template:
+    metadata:
+      labels: { app: llm-agent, component: llm }
+    spec:
+      serviceAccountName: {{ .Values.serviceAccount.name }}
+      {{- if .Values.llmAgent.tolerations }}
+      tolerations: {{- toYaml .Values.llmAgent.tolerations | nindent 8 }}
+      {{- end }}
+      {{- if .Values.llmAgent.nodeSelector }}
+      nodeSelector: {{- toYaml .Values.llmAgent.nodeSelector | nindent 8 }}
+      {{- end }}
+      initContainers:
+        - name: model-puller
+          image: ollama/ollama:latest
+          command:
+            - /bin/sh
+            - -c
+            - |
+              ollama serve &
+              SERVER_PID=$!
+              sleep 8
+              ollama pull {{ .Values.llmAgent.model.ollamaModel }}
+              kill $SERVER_PID
+          volumeMounts:
+            - name: ollama-data
+              mountPath: /root/.ollama
+          resources:
+            requests: { memory: "2Gi", cpu: "1" }
+            limits:   { memory: "4Gi", cpu: "2" }
+      containers:
+        - name: ollama
+          image: ollama/ollama:latest
+          command: ["serve"]
+          ports:
+            - { containerPort: 11434, name: http }
+          volumeMounts:
+            - name: ollama-data
+              mountPath: /root/.ollama
+          resources:
+            requests:
+              memory: {{ .Values.llmAgent.resources.requests.memory | quote }}
+              cpu: {{ .Values.llmAgent.resources.requests.cpu | quote }}
+              {{- if .Values.llmAgent.gpu.enabled }}
+              nvidia.com/gpu: {{ .Values.llmAgent.gpu.count }}
+              {{- end }}
+            limits:
+              memory: {{ .Values.llmAgent.resources.limits.memory | quote }}
+              cpu: {{ .Values.llmAgent.resources.limits.cpu | quote }}
+              {{- if .Values.llmAgent.gpu.enabled }}
+              nvidia.com/gpu: {{ .Values.llmAgent.gpu.count }}
+              {{- end }}
+          livenessProbe:
+            exec:
+              command: ["ollama", "list"]
+            initialDelaySeconds: 30
+            periodSeconds: 30
+          readinessProbe:
+            exec:
+              command: ["ollama", "list"]
+            initialDelaySeconds: 10
+            periodSeconds: 10
+  volumeClaimTemplates:
+    - metadata:
+        name: ollama-data
+      spec:
+        accessModes: [ReadWriteOnce]
+        {{- if .Values.llmAgent.persistence.storageClass }}
+        storageClassName: {{ .Values.llmAgent.persistence.storageClass }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.llmAgent.persistence.size }}
+{{- else }}
+# ── vLLM backend ──────────────────────────────────────────────────────────────
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
@@ -17,7 +105,9 @@ spec:
       labels: { app: llm-agent, component: llm }
     spec:
       serviceAccountName: {{ .Values.serviceAccount.name }}
+      {{- if .Values.priorityClassName }}
       priorityClassName: {{ .Values.priorityClassName }}
+      {{- end }}
       {{- if .Values.llmAgent.tolerations }}
       tolerations: {{- toYaml .Values.llmAgent.tolerations | nindent 8 }}
       {{- end }}
@@ -110,6 +200,7 @@ spec:
         resources:
           requests:
             storage: {{ .Values.llmAgent.persistence.size }}
+{{- end }}
 ---
 apiVersion: v1
 kind: Service
@@ -119,7 +210,7 @@ metadata:
 spec:
   selector: { app: llm-agent }
   ports:
-    - { name: http, port: 8000, targetPort: 8000 }
+    - { name: http, port: {{ .Values.llmAgent.port }}, targetPort: {{ .Values.llmAgent.port }} }
 ---
 apiVersion: v1
 kind: Service
@@ -129,7 +220,7 @@ spec:
   clusterIP: None
   selector: { app: llm-agent }
   ports:
-    - { name: http, port: 8000 }
+    - { name: http, port: {{ .Values.llmAgent.port }} }
 {{- if .Values.podDisruptionBudget.enabled }}
 ---
 apiVersion: policy/v1
