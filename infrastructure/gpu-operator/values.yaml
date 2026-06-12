@@ -6,19 +6,13 @@ operator:
   defaultRuntime: containerd
 
 driver:
-  enabled: true
-  version: "535.104.05"
-  # Set to false if drivers are pre-installed on nodes
-  # enabled: false
+  enabled: false  # Drivers pre-installed on node (580.x)
 
 toolkit:
-  enabled: true
+  enabled: false  # k3s uses its own containerd; configured manually via config.toml.tmpl
 
 devicePlugin:
-  enabled: true
-  config:
-    name: time-slicing-config
-    default: any
+  enabled: false  # Installed manually as a daemonset
 
 # Time-slicing allows multiple pods to share one GPU
 # Useful for development and smaller models
