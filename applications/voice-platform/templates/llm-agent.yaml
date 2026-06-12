@@ -45,7 +45,7 @@ spec:
       containers:
         - name: ollama
           image: ollama/ollama:latest
-          command: ["serve"]
+          args: ["serve"]
           ports:
             - { containerPort: 11434, name: http }
           volumeMounts:
