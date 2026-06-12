@@ -32,3 +32,13 @@ spec:
     - group: apps
       kind: StatefulSet
       jsonPointers: [/spec/volumeClaimTemplates]
+    - group: ""
+      kind: ConfigMap
+      name: vllm-model-config
+      namespace: voice-platform
+      jsonPointers:
+        - /data/model_source
+        - /data/minio_path
+        - /data/minio_bucket
+        - /data/job_id
+        - /data/mlflow_run_id
