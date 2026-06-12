@@ -19,7 +19,7 @@ whisperStt:
 llmAgent:
   backend: vllm
   port: 8000
-  replicas: 0
+  replicas: 1
   imagePullPolicy: IfNotPresent
   gpu:
     enabled: true
