@@ -221,7 +221,7 @@ spec:
           image: "{{ .Values.llmAgent.image }}"
           imagePullPolicy: {{ .Values.llmAgent.imagePullPolicy | default .Values.global.imagePullPolicy }}
           command:
-            - python
+            - python3
             - -m
             - vllm.entrypoints.openai.api_server
             - --model={{ .Values.llmAgent.model.cacheDir }}/current
