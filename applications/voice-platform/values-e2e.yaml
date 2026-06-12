@@ -19,6 +19,7 @@ whisperStt:
 llmAgent:
   backend: vllm
   port: 8000
+  replicas: 0
   imagePullPolicy: IfNotPresent
   gpu:
     enabled: true
@@ -57,7 +58,7 @@ voiceGateway:
 podDisruptionBudget:
   enabled: false
 
-priorityClassName: ""
+priorityClassName: "ml-inference-low"
 
 monitoring:
   enabled: false
