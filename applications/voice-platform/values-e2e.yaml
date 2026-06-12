@@ -5,13 +5,17 @@ global:
   imagePullPolicy: Never
 
 whisperStt:
+  gpu:
+    enabled: false       # only 1 GPU on node — reserve it for LLM
   model:
     size: small
-    device: cuda
-    computeType: float16
+    device: cpu
+    computeType: int8
   resources:
-    requests: { memory: "2Gi", cpu: "1" }
-    limits:   { memory: "6Gi", cpu: "4" }
+    requests: { memory: "2Gi", cpu: "2" }
+    limits:   { memory: "4Gi", cpu: "8" }
+  tolerations: []
+  nodeSelector: {}
 
 llmAgent:
   backend: ollama
