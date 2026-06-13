@@ -20,24 +20,27 @@ from .tools import TOOLS, TOOLS_SCHEMA
 
 log = logging.getLogger(__name__)
 
-SYSTEM_PROMPT = f"""You are a helpful, friendly voice assistant. Your responses will be spoken aloud, so:
-- Keep answers short (1-3 sentences max)
-- Speak naturally and conversationally
-- Never use markdown, bullet points, or lists
-- Don't say "According to..." or "Based on..." — just answer directly
-- IMPORTANT: Always reply in the same language the user spoke in. If they speak Hindi, reply in Hindi. If Gujarati, reply in Gujarati. If English, reply in English.
+SANJANA_INSTRUCTION = """You are Sanjana, Symphony Support AI.
+CRITICAL SPEED RULE: Complete call as fast as possible.
+- NO filler words ("Okay", "I understand", "Let me check", "ji", "theek hai")
+- ONE question at a time
+- Match customer's language (Hindi/Gujarati/English/Tamil/Telugu)
 
-{TOOLS_SCHEMA}
+STEP 1 GREETING:
+  Hi: "Namaskar, main Sanjana Symphony customer care se. Kya sahayata kar sakti hu?"
+  Gu: "Namaskar, hu Sanjana Symphony customer care mathi. Shu madad kari shaku?"
+  En: "Hello, Sanjana from Symphony customer care. How may I help you?"
+  Ta: "Vanakkam, Symphony customer care Sanjana pesugiren. Enna udavi seyyalaam?"
+  Te: "Namaskaram, Symphony customer care Sanjana. Ela sahayam chesukovalanukuntunnaru?"
 
-To use a tool, respond with this exact format on its own line:
-TOOL: {{"name": "tool_name", "args": {{"param": "value"}}}}
-
-After receiving the tool result (shown as TOOL_RESULT: ...), continue thinking and use more tools if needed.
-
-When you have the answer, respond with:
-ANSWER: your spoken response here
-
-Always end with ANSWER: even if you could not find information."""
+STEP 2 CONTACT: mobile number -> name
+STEP 3 LOCATION: pincode -> full address
+STEP 4 PRODUCT: model name -> purchase date
+STEP 5 WARRANTY:
+  <1 year -> in warranty, no charge
+  >1 year or unknown -> "Out of warranty. Technician visit: 472 rupees. Parts/cleaning extra. Complaint raise karun?" (in customer's language)
+STEP 6 ISSUE: ask exact problem
+STEP 7 CLOSE: confirm complaint raised, SMS coming, technician will call. Trigger register_service_request."""
 
 
 @dataclass
@@ -72,6 +75,27 @@ def _extract_json_object(text: str) -> str | None:
     return None
 
 
+def _build_alpaca_prompt(history: list[dict], user_text: str) -> str:
+    """Build Alpaca-format prompt matching fine-tuning training data."""
+    # Reconstruct conversation transcript from history
+    lines = []
+    for msg in history:
+        role = "Agent" if msg["role"] == "assistant" else "Customer"
+        lines.append(f"{role}: {msg['content']}")
+    lines.append(f"Customer: {user_text}")
+    transcript = "\n".join(lines) if lines else f"Customer: {user_text}"
+
+    return (
+        f"### Instruction:\n{SANJANA_INSTRUCTION}\n\n"
+        f"### Input:\n"
+        f"Language: English\n"
+        f"Conversation so far:\n{transcript}\n\n"
+        f"Customer just said: {user_text}\n\n"
+        f"### Response:\n"
+        f"Agent:"
+    )
+
+
 async def run_agent(
     user_text: str,
     history: list[dict],
@@ -83,7 +107,7 @@ async def run_agent(
     on_event is called for each intermediate step (tool calls, tool results)
     so the WebSocket gateway can stream progress to the client.
     """
-    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    messages = [{"role": "system", "content": ""}]  # kept for history tracking
     messages.extend(history)
     messages.append({"role": "user", "content": user_text})
 
@@ -157,20 +181,25 @@ async def run_agent(
 
 
 async def _call_llm(messages: list[dict]) -> str:
+    # Extract history (exclude empty system message) and last user message
+    history = [m for m in messages[:-1] if m["role"] != "system" and m.get("content")]
+    user_text = messages[-1]["content"]
+    prompt = _build_alpaca_prompt(history, user_text)
+
     async with httpx.AsyncClient(timeout=settings.request_timeout) as client:
         resp = await client.post(
-            f"{settings.llm_url}/v1/chat/completions",
+            f"{settings.llm_url}/v1/completions",
             json={
                 "model": settings.llm_model,
-                "messages": messages,
-                "max_tokens": 512,
-                "temperature": 0.7,
-                "stop": ["TOOL_RESULT:"],
+                "prompt": prompt,
+                "max_tokens": 120,
+                "temperature": 0.3,
+                "stop": ["### Instruction", "### Input", "Customer:", "\n\n"],
             },
         )
         resp.raise_for_status()
         data = resp.json()
-        return data["choices"][0]["message"]["content"]
+        return data["choices"][0]["text"].strip()
 
 
 async def _execute_tool(name: str, args: dict) -> str:

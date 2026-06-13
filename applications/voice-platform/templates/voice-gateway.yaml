@@ -117,5 +117,17 @@ spec:
               service:
                 name: voice-gateway
                 port: { name: http }
+          - path: /stt/
+            pathType: Prefix
+            backend:
+              service:
+                name: whisper-stt
+                port: { number: 8001 }
+          - path: /tts/
+            pathType: Prefix
+            backend:
+              service:
+                name: tts-service
+                port: { number: 8002 }
 {{- end }}
 {{- end }}
