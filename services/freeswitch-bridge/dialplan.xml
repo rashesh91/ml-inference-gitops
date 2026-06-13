@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  FreeSWITCH dialplan — route inbound calls to Sanjana AI bridge
+  Place in: /etc/freeswitch/dialplan/default/99_sanjana.xml
+  (or public.xml for DID inbound from carrier)
+
+  The `socket` application connects TO your Python bridge on port 8086.
+  async = commands don't block FreeSWITCH
+  full  = bridge receives full event stream for this call
+-->
+<include>
+  <context name="default">
+
+    <!-- Route extension 9999 (test) and any DID to Sanjana -->
+    <extension name="sanjana-ai-agent">
+      <condition field="destination_number" expression="^(9999|YOUR_DID_NUMBER)$">
+        <action application="socket" data="127.0.0.1:8086 async full"/>
+      </condition>
+    </extension>
+
+  </context>
+</include>
