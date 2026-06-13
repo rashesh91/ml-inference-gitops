@@ -10,10 +10,14 @@ ExecStart=/opt/sanjana-bridge/venv/bin/python3 /opt/sanjana-bridge/bridge.py
 Restart=always
 RestartSec=5
 Environment=BRIDGE_PORT=8086
-Environment=GATEWAY_WS=wss://aitest.lintel.in/ws
-Environment=RECORD_SILENCE_SEC=2
+Environment=GATEWAY_BASE=https://aitest.lintel.in
+Environment=RECORD_SILENCE_SEC=1
 Environment=RECORD_MAX_SEC=15
 Environment=TMP_DIR=/tmp/sanjana
+Environment=STT_PROVIDER=sarvam
+Environment=TTS_PROVIDER=sarvam
+# Set your Sarvam API key:  get it at https://dashboard.sarvam.ai
+Environment=SARVAM_API_KEY=
 StandardOutput=journal
 StandardError=journal
 
