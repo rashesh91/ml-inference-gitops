@@ -18,7 +18,7 @@ echo ""
 # ── 1. Dependencies ───────────────────────────────────────────────────────────
 echo "[1/5] Installing system dependencies..."
 apt-get update -q
-apt-get install -y python3 python3-venv python3-pip
+apt-get install -y python3 python3-venv python3-pip ffmpeg
 
 # ── 2. Install bridge files ───────────────────────────────────────────────────
 echo "[2/5] Installing bridge files to $INSTALL_DIR..."

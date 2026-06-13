@@ -1,23 +1,25 @@
 #!/usr/bin/env python3
 """
-Sanjana FreeSWITCH AI Bridge
------------------------------
-Outbound ESL socket server: FreeSWITCH connects here when a call arrives.
+Sanjana FreeSWITCH AI Bridge — v2 (production fixes)
+-----------------------------------------------------
+Fix 1: MP3 → WAV via ffmpeg   (no mod_shout dependency)
+Fix 2: Fallback on gateway error  (play built-in error sound, retry once)
+Fix 3: Barge-in  (caller speech or DTMF interrupts Sanjana mid-sentence)
 
-Flow per call:
-  1. FreeSWITCH dials → TCP connection to port 8086
-  2. Bridge answers → sets 16kHz recording
-  3. Record caller audio (stops after 2s silence)
-  4. Send WAV to voice-gateway WebSocket → get TTS response
-  5. Play audio back to caller
-  6. Loop until hangup
+Architecture change from v1:
+  Each call spawns a background event-reader thread that drains the ESL socket
+  into a queue.Queue. The main call thread reads from the queue. This lets us
+  watch for barge-in events while also waiting for playback to finish — which
+  was impossible in v1's sequential _recv_block design.
 """
 import asyncio
 import base64
 import json
 import logging
 import os
+import queue
 import socket
+import subprocess
 import threading
 import time
 import uuid
@@ -27,14 +29,21 @@ import websockets
 # ── Config ────────────────────────────────────────────────────────────────────
 BRIDGE_HOST = "0.0.0.0"
 BRIDGE_PORT = int(os.getenv("BRIDGE_PORT", "8086"))
-GATEWAY_WS = os.getenv("GATEWAY_WS", "wss://aitest.lintel.in/ws")
+GATEWAY_WS   = os.getenv("GATEWAY_WS", "wss://aitest.lintel.in/ws")
 GREETING_TEXT = os.getenv(
     "GREETING_TEXT",
     "Namaskar, main Sanjana Symphony customer care se. Kya sahayata kar sakti hu?"
 )
-RECORD_SILENCE_SEC = int(os.getenv("RECORD_SILENCE_SEC", "2"))   # stop after N seconds silence
-RECORD_MAX_SEC = int(os.getenv("RECORD_MAX_SEC", "15"))          # max utterance length
-TMP_DIR = os.getenv("TMP_DIR", "/tmp/sanjana")
+RECORD_SILENCE_SEC = int(os.getenv("RECORD_SILENCE_SEC", "2"))
+RECORD_MAX_SEC     = int(os.getenv("RECORD_MAX_SEC",     "15"))
+TMP_DIR            = os.getenv("TMP_DIR", "/tmp/sanjana")
+
+# FIX 2: built-in FreeSWITCH fallback sound (no TTS / gateway needed)
+FALLBACK_WAV = os.getenv(
+    "FALLBACK_WAV",
+    "/usr/share/freeswitch/sounds/en/us/callie/ivr/8000/ivr-please_try_again.wav",
+)
+GATEWAY_RETRY_MAX = 1   # retry once on transient error before playing fallback
 
 logging.basicConfig(
     level=logging.INFO,
@@ -45,10 +54,50 @@ log = logging.getLogger("bridge")
 os.makedirs(TMP_DIR, exist_ok=True)
 
 
+# ── FIX 1: MP3 → WAV conversion ──────────────────────────────────────────────
+
+def _mp3_to_wav(mp3_path: str) -> str | None:
+    """
+    Convert MP3 to 8kHz mono PCM WAV using ffmpeg.
+    Returns WAV path on success, None on failure.
+    FreeSWITCH playback works natively with WAV — no mod_shout needed.
+    """
+    wav_path = mp3_path.replace(".mp3", ".wav")
+    try:
+        result = subprocess.run(
+            [
+                "ffmpeg", "-y", "-i", mp3_path,
+                "-ar", "8000",        # 8 kHz — matches FS default telephony rate
+                "-ac", "1",           # mono
+                "-acodec", "pcm_s16le",
+                wav_path,
+            ],
+            capture_output=True,
+            timeout=15,
+        )
+        if result.returncode != 0:
+            log.error(f"ffmpeg failed: {result.stderr.decode()[:200]}")
+            return None
+        return wav_path
+    except FileNotFoundError:
+        log.error("ffmpeg not found — install with: apt-get install -y ffmpeg")
+        return None
+    except subprocess.TimeoutExpired:
+        log.error("ffmpeg timed out")
+        return None
+
+
+def _cleanup(path: str):
+    try:
+        os.unlink(path)
+    except OSError:
+        pass
+
+
 # ── ESL raw socket helpers ────────────────────────────────────────────────────
 
-def _recv_block(sock: socket.socket) -> str:
-    """Read until double newline (one ESL message block)."""
+def _recv_raw(sock: socket.socket) -> str:
+    """Read one ESL block (ends with \\n\\n) from socket."""
     buf = b""
     while not buf.endswith(b"\n\n"):
         try:
@@ -68,18 +117,22 @@ def _send(sock: socket.socket, data: str):
         pass
 
 
-def _execute(sock: socket.socket, app: str, arg: str = "", event_lock: bool = False) -> str:
-    """Send a dialplan app execution command and read the reply."""
+def _execute(sock: socket.socket, app: str, arg: str = "") -> str:
+    """Execute a dialplan app (non-blocking — reply arrives on event queue)."""
     cmd = (
         f"sendmsg\n"
         f"Call-Command: execute\n"
         f"Execute-App-Name: {app}\n"
         f"Execute-App-Arg: {arg}\n"
     )
-    if event_lock:
-        cmd += "Event-Lock: true\n"
     _send(sock, cmd)
-    return _recv_block(sock)
+    return _recv_raw(sock)   # read the immediate command ACK (not the event)
+
+
+def _api(sock: socket.socket, cmd: str) -> str:
+    """Send an ESL API command and read the reply."""
+    _send(sock, f"api {cmd}")
+    return _recv_raw(sock)
 
 
 def _uuid_from_block(block: str) -> str | None:
@@ -89,36 +142,70 @@ def _uuid_from_block(block: str) -> str | None:
     return None
 
 
-def _wait_for_event(sock: socket.socket, event_name: str, timeout: float = 20.0) -> bool:
-    """Drain events until we see event_name or timeout/hangup."""
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        sock.settimeout(deadline - time.time())
+# ── Event reader thread ───────────────────────────────────────────────────────
+
+# FIX 3 enabler: a background thread drains all incoming ESL events from the
+# socket into a queue. The main call handler reads from the queue. This lets us
+# detect barge-in (DTMF / DETECTED_SPEECH) while simultaneously waiting for
+# playback to finish — impossible with v1's blocking _recv_block loop.
+
+_HANGUP_SENTINEL = "__HANGUP__"
+
+
+def _event_reader(sock: socket.socket, ev_queue: queue.Queue, stop: threading.Event):
+    """Background thread: read ESL events → push to queue."""
+    while not stop.is_set():
         try:
-            block = _recv_block(sock)
+            sock.settimeout(1.0)
+            block = _recv_raw(sock)
         except OSError:
-            return False
+            ev_queue.put(_HANGUP_SENTINEL)
+            return
         finally:
-            sock.settimeout(None)
+            try:
+                sock.settimeout(None)
+            except OSError:
+                pass
         if not block:
-            return False
-        if f"Event-Name: {event_name}" in block:
-            return True
+            ev_queue.put(_HANGUP_SENTINEL)
+            return
+        ev_queue.put(block)
+
+
+def _wait_for_any(ev_queue: queue.Queue, events: list[str], timeout: float) -> str:
+    """
+    Block until one of `events` fires, or timeout/hangup.
+    Returns the matching event name, 'CHANNEL_HANGUP', or 'TIMEOUT'.
+    """
+    deadline = time.time() + timeout
+    while True:
+        remaining = deadline - time.time()
+        if remaining <= 0:
+            return "TIMEOUT"
+        try:
+            block = ev_queue.get(timeout=min(remaining, 1.0))
+        except queue.Empty:
+            continue
+        if block is _HANGUP_SENTINEL:
+            return "CHANNEL_HANGUP"
         if "Event-Name: CHANNEL_HANGUP" in block:
-            return False
-    return False
+            return "CHANNEL_HANGUP"
+        for ev in events:
+            if f"Event-Name: {ev}" in block:
+                return ev
+    # unreachable
 
 
-# ── Voice Gateway WebSocket ───────────────────────────────────────────────────
+# ── Voice Gateway ─────────────────────────────────────────────────────────────
 
-async def _gateway_exchange(session_id: str, wav_bytes: bytes) -> bytes | None:
-    """Send WAV audio to voice gateway, return MP3 audio bytes or None on error."""
+async def _gateway_audio(session_id: str, wav_bytes: bytes) -> bytes | None:
     uri = f"{GATEWAY_WS}/{session_id}"
     try:
         async with websockets.connect(uri, open_timeout=10, close_timeout=5) as ws:
-            b64 = base64.b64encode(wav_bytes).decode()
-            await ws.send(json.dumps({"type": "audio", "data": b64}))
-
+            await ws.send(json.dumps({
+                "type": "audio",
+                "data": base64.b64encode(wav_bytes).decode(),
+            }))
             mp3_data = None
             async for raw in ws:
                 try:
@@ -135,19 +222,11 @@ async def _gateway_exchange(session_id: str, wav_bytes: bytes) -> bytes | None:
                     break
             return mp3_data
     except Exception as e:
-        log.error(f"Gateway WebSocket failed: {e}")
+        log.error(f"Gateway WS error: {e}")
         return None
 
 
-def _call_gateway(session_id: str, wav_bytes: bytes) -> bytes | None:
-    """Synchronous wrapper — runs asyncio loop in this thread."""
-    return asyncio.run(_gateway_exchange(session_id, wav_bytes))
-
-
-# ── Greeting via gateway ──────────────────────────────────────────────────────
-
 async def _gateway_text(session_id: str, text: str) -> bytes | None:
-    """Send a text message to gateway (for greeting), return TTS audio."""
     uri = f"{GATEWAY_WS}/{session_id}"
     try:
         async with websockets.connect(uri, open_timeout=10, close_timeout=5) as ws:
@@ -162,8 +241,60 @@ async def _gateway_text(session_id: str, text: str) -> bytes | None:
                     break
             return mp3_data
     except Exception as e:
-        log.error(f"Greeting gateway call failed: {e}")
+        log.error(f"Gateway text error: {e}")
         return None
+
+
+def _call_gateway_audio(session_id: str, wav_bytes: bytes) -> bytes | None:
+    return asyncio.run(_gateway_audio(session_id, wav_bytes))
+
+
+def _call_gateway_text(session_id: str, text: str) -> bytes | None:
+    return asyncio.run(_gateway_text(session_id, text))
+
+
+# ── Playback with barge-in (FIX 3) ───────────────────────────────────────────
+
+# FIX 3: BARGE-IN
+# During playback we watch for two barge-in signals on the event queue:
+#   DTMF         — caller pressed any key (common in IVR)
+#   DETECTED_SPEECH — caller started speaking (fires if mod_vad / detect_speech active)
+# Either one triggers uuid_break to immediately stop Sanjana's audio.
+# After break, we drain the leftover CHANNEL_EXECUTE_COMPLETE and start recording.
+
+_BARGE_IN_EVENTS = ["DTMF", "DETECTED_SPEECH"]
+
+
+def _play_wav(
+    sock: socket.socket,
+    call_uuid: str,
+    wav_path: str,
+    ev_queue: queue.Queue,
+    timeout: float = 30.0,
+) -> bool:
+    """
+    Play a WAV file. Returns True on normal finish, False on barge-in or hangup.
+    Barge-in: stops playback immediately and returns False so caller can re-record.
+    """
+    _execute(sock, "playback", wav_path)
+
+    event = _wait_for_any(
+        ev_queue,
+        ["CHANNEL_EXECUTE_COMPLETE"] + _BARGE_IN_EVENTS,
+        timeout=timeout,
+    )
+
+    if event in _BARGE_IN_EVENTS:
+        log.info(f"Barge-in ({event}) — breaking playback")
+        _api(sock, f"uuid_break {call_uuid} all")
+        # drain the EXECUTE_COMPLETE that will follow the break
+        _wait_for_any(ev_queue, ["CHANNEL_EXECUTE_COMPLETE"], timeout=3.0)
+        return False
+
+    if event == "CHANNEL_HANGUP":
+        return False
+
+    return True  # CHANNEL_EXECUTE_COMPLETE — normal finish
 
 
 # ── Per-call handler ──────────────────────────────────────────────────────────
@@ -172,104 +303,134 @@ def handle_call(sock: socket.socket, addr):
     session_id = str(uuid.uuid4())
     log.info(f"New call from {addr} → session {session_id}")
 
-    # Read initial channel data block FreeSWITCH sends on connect
-    block = _recv_block(sock)
+    # ── ESL handshake ─────────────────────────────────────────────────────────
+    block = _recv_raw(sock)
     call_uuid = _uuid_from_block(block)
     log.info(f"Call UUID: {call_uuid}")
 
-    # ESL handshake: tell FS we are ready
     _send(sock, "connect")
-    _recv_block(sock)
+    _recv_raw(sock)
     _send(sock, "myevents")
-    _recv_block(sock)
+    _recv_raw(sock)
 
-    # Answer the call
+    # Start event reader background thread
+    ev_queue: queue.Queue = queue.Queue()
+    stop_reader = threading.Event()
+    reader_thread = threading.Thread(
+        target=_event_reader,
+        args=(sock, ev_queue, stop_reader),
+        name=f"reader-{call_uuid[:8]}",
+        daemon=True,
+    )
+    reader_thread.start()
+
+    # ── Answer ────────────────────────────────────────────────────────────────
     _execute(sock, "answer")
     time.sleep(0.5)
 
-    # Force 16 kHz recording for better Whisper transcription
+    # Force 16 kHz recording (better Whisper accuracy)
     _execute(sock, "set", "RECORD_SAMPLE_RATE=16000")
 
-    # Get greeting audio from gateway and play it
-    log.info("Fetching greeting audio…")
-    greeting_audio = asyncio.run(_gateway_text(session_id, GREETING_TEXT))
-    if greeting_audio:
-        greeting_path = f"{TMP_DIR}/greet_{session_id}.mp3"
-        with open(greeting_path, "wb") as f:
-            f.write(greeting_audio)
-        _execute(sock, "playback", greeting_path, event_lock=True)
-        _wait_for_event(sock, "CHANNEL_EXECUTE_COMPLETE", timeout=15)
-        try:
-            os.unlink(greeting_path)
-        except OSError:
-            pass
+    # Enable VAD so DETECTED_SPEECH events fire for voice barge-in
+    # (requires mod_vad in FreeSWITCH; silently no-ops if not loaded)
+    _execute(sock, "set", "vad_energy_level=300")
+    _execute(sock, "set", "vad_talk_hits=5")
+    _execute(sock, "set", "vad_silence_hits=20")
+    _execute(sock, "vad_test", "aleg")
 
-    # Conversation loop
+    # ── Greeting ──────────────────────────────────────────────────────────────
+    log.info("Fetching greeting audio…")
+    greet_mp3 = _call_gateway_text(session_id, GREETING_TEXT)
+    if greet_mp3:
+        mp3_path = f"{TMP_DIR}/greet_{session_id}.mp3"
+        with open(mp3_path, "wb") as f:
+            f.write(greet_mp3)
+        wav_path = _mp3_to_wav(mp3_path)   # FIX 1
+        _cleanup(mp3_path)
+        if wav_path:
+            _play_wav(sock, call_uuid, wav_path, ev_queue, timeout=15)
+            _cleanup(wav_path)
+    else:
+        # FIX 2: gateway down at greeting — play fallback and continue
+        log.warning("Gateway unavailable for greeting, playing fallback")
+        _play_wav(sock, call_uuid, FALLBACK_WAV, ev_queue, timeout=10)
+
+    # ── Conversation loop ─────────────────────────────────────────────────────
     turn = 0
     while True:
         turn += 1
         rec_path = f"{TMP_DIR}/rec_{session_id}_{turn}.wav"
 
-        # Record caller utterance
+        # Record caller utterance (stops on silence or max length)
         _execute(
             sock, "record",
             f"{rec_path} {RECORD_MAX_SEC} 200 {RECORD_SILENCE_SEC}",
-            event_lock=False,
         )
+        log.info(f"Turn {turn}: recording…")
 
-        # Wait for recording to finish (silence timeout or max length)
-        log.info(f"Turn {turn}: recording to {rec_path}…")
-        stopped = _wait_for_event(sock, "RECORD_STOP", timeout=RECORD_MAX_SEC + 5)
-        if not stopped:
-            log.info(f"Turn {turn}: hangup detected, ending session")
+        event = _wait_for_any(ev_queue, ["RECORD_STOP"], timeout=RECORD_MAX_SEC + 5)
+        if event != "RECORD_STOP":
+            log.info(f"Turn {turn}: {event} — ending session")
             break
 
-        # Skip empty/tiny recordings (< 0.5s = 16000 * 2 * 0.5 bytes header + ~32000)
+        # Skip recordings too short to contain speech (< ~0.3s of audio)
         try:
             size = os.path.getsize(rec_path)
         except OSError:
             size = 0
-
-        if size < 16000:
-            log.info(f"Turn {turn}: recording too short ({size} bytes), skipping")
-            try:
-                os.unlink(rec_path)
-            except OSError:
-                pass
+        if size < 9600:   # 0.3s × 8000 Hz × 2 bytes
+            log.info(f"Turn {turn}: too short ({size}B), skipping")
+            _cleanup(rec_path)
             continue
 
-        # Send to voice gateway
-        log.info(f"Turn {turn}: sending {size} bytes to gateway…")
+        # ── FIX 2: gateway call with retry ───────────────────────────────────
+        log.info(f"Turn {turn}: sending {size}B to gateway…")
         with open(rec_path, "rb") as f:
             wav_bytes = f.read()
-        try:
-            os.unlink(rec_path)
-        except OSError:
-            pass
+        _cleanup(rec_path)
 
-        mp3_bytes = _call_gateway(session_id, wav_bytes)
+        mp3_bytes = None
+        for attempt in range(1, GATEWAY_RETRY_MAX + 2):
+            mp3_bytes = _call_gateway_audio(session_id, wav_bytes)
+            if mp3_bytes is not None:
+                break
+            log.warning(f"Turn {turn}: gateway attempt {attempt} failed")
+            time.sleep(0.5)
+
         if mp3_bytes is None:
-            log.warning(f"Turn {turn}: no response from gateway, continuing")
+            # FIX 2: play "please try again" so caller is not left in silence
+            log.warning(f"Turn {turn}: gateway down — playing fallback")
+            _play_wav(sock, call_uuid, FALLBACK_WAV, ev_queue, timeout=10)
             continue
 
-        # Play response
-        resp_path = f"{TMP_DIR}/resp_{session_id}_{turn}.mp3"
-        with open(resp_path, "wb") as f:
+        # ── FIX 1: convert MP3 → WAV before playback ─────────────────────────
+        mp3_path = f"{TMP_DIR}/resp_{session_id}_{turn}.mp3"
+        with open(mp3_path, "wb") as f:
             f.write(mp3_bytes)
 
-        log.info(f"Turn {turn}: playing {len(mp3_bytes)} byte response")
-        _execute(sock, "playback", resp_path, event_lock=False)
-        _wait_for_event(sock, "CHANNEL_EXECUTE_COMPLETE", timeout=30)
-        try:
-            os.unlink(resp_path)
-        except OSError:
-            pass
+        wav_path = _mp3_to_wav(mp3_path)
+        _cleanup(mp3_path)
 
+        if wav_path is None:
+            log.error(f"Turn {turn}: ffmpeg conversion failed, skipping playback")
+            continue
+
+        # ── FIX 3: play with barge-in support ────────────────────────────────
+        log.info(f"Turn {turn}: playing response ({len(mp3_bytes)}B)")
+        completed = _play_wav(sock, call_uuid, wav_path, ev_queue, timeout=30)
+        _cleanup(wav_path)
+
+        if not completed:
+            # Caller interrupted — go straight to recording next utterance
+            log.info(f"Turn {turn}: barge-in — re-recording immediately")
+            # (loop continues, recording starts at top of next iteration)
+
+    stop_reader.set()
     sock.close()
     log.info(f"Session {session_id} ended after {turn} turns")
 
 
-# ── Main ESL socket server ────────────────────────────────────────────────────
+# ── Main server ───────────────────────────────────────────────────────────────
 
 def serve():
     srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -283,13 +444,12 @@ def serve():
             conn, addr = srv.accept()
         except KeyboardInterrupt:
             break
-        t = threading.Thread(
+        threading.Thread(
             target=handle_call,
             args=(conn, addr),
             name=f"call-{addr[1]}",
             daemon=True,
-        )
-        t.start()
+        ).start()
 
 
 if __name__ == "__main__":
