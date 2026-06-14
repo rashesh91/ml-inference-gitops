@@ -202,6 +202,72 @@ async def _call_llm(messages: list[dict]) -> str:
         return data["choices"][0]["text"].strip()
 
 
+async def _call_llm_streaming(messages: list[dict]) -> AsyncIterator[str]:
+    """Stream tokens from vLLM using SSE; yields text tokens as they arrive."""
+    history = [m for m in messages[:-1] if m["role"] != "system" and m.get("content")]
+    user_text = messages[-1]["content"]
+    prompt = _build_alpaca_prompt(history, user_text)
+
+    async with httpx.AsyncClient(timeout=settings.request_timeout) as client:
+        async with client.stream(
+            "POST",
+            f"{settings.llm_url}/v1/completions",
+            json={
+                "model": settings.llm_model,
+                "prompt": prompt,
+                "max_tokens": 120,
+                "temperature": 0.3,
+                "stop": ["### Instruction", "### Input", "Customer:", "\n\n"],
+                "stream": True,
+            },
+        ) as resp:
+            resp.raise_for_status()
+            async for line in resp.aiter_lines():
+                if not line.startswith("data: "):
+                    continue
+                payload = line[6:]
+                if payload == "[DONE]":
+                    return
+                try:
+                    data = json.loads(payload)
+                    token = data["choices"][0].get("text", "")
+                    if token:
+                        yield token
+                except Exception:
+                    pass
+
+
+async def run_agent_streaming(
+    user_text: str,
+    history: list[dict],
+) -> AsyncIterator[str]:
+    """
+    Stream LLM tokens, yield complete sentences as they form.
+    Sentence boundaries: . ! ? । (Hindi danda) or newline.
+    Caller can start TTS on sentence 1 while sentence 2 is still generating.
+    """
+    messages = [{"role": "system", "content": ""}]
+    messages.extend(history)
+    messages.append({"role": "user", "content": user_text})
+
+    buffer = ""
+    sentence_re = re.compile(r"([.!?।\n])")
+
+    async for token in _call_llm_streaming(messages):
+        buffer += token
+        while True:
+            m = sentence_re.search(buffer)
+            if not m:
+                break
+            sentence = buffer[: m.end()].strip()
+            buffer = buffer[m.end() :]
+            if sentence:
+                yield sentence
+
+    if buffer.strip():
+        yield buffer.strip()
+
+
 async def _execute_tool(name: str, args: dict) -> str:
     fn = TOOLS.get(name)
     if fn is None:

@@ -18,12 +18,13 @@ WebSocket protocol (JSON messages):
     {type: "error", message: "..."}
 """
 import base64
+import json
 import logging
 import uuid
 from pathlib import Path
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from prometheus_client import Gauge
 from prometheus_fastapi_instrumentator import Instrumentator
@@ -82,6 +83,32 @@ async def chat_text(req: TextChatRequest):
         "answer": answer,
         "audio_b64": audio_b64,
     }
+
+
+# ── REST: streaming text chat (SSE) ──────────────────────────────────────────
+
+@app.post("/api/chat/stream")
+async def chat_stream(req: TextChatRequest):
+    """
+    SSE endpoint for streaming LLM response sentence-by-sentence.
+    Bridge calls this to overlap TTS generation with LLM generation.
+    Events: data: {"sentence": "..."}\n\n  then  data: [DONE]\n\n
+    """
+    session_id = req.session_id or str(uuid.uuid4())
+    session = _sessions.setdefault(session_id, Session(session_id))
+
+    from .agent import run_agent_streaming
+
+    full_sentences: list[str] = []
+
+    async def generate():
+        async for sentence in run_agent_streaming(req.text, session.history):
+            full_sentences.append(sentence)
+            yield f"data: {json.dumps({'sentence': sentence})}\n\n"
+        session.add_turn(req.text, " ".join(full_sentences))
+        yield "data: [DONE]\n\n"
+
+    return StreamingResponse(generate(), media_type="text/event-stream")
 
 
 # ── Frontend ──────────────────────────────────────────────────────────────────
