@@ -1,0 +1,335 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Voice Latency Dashboard</title>
+<style>
+  :root {
+    --bg: #0d1117; --surface: #161b22; --border: #30363d;
+    --text: #e6edf3; --muted: #8b949e; --blue: #388bfd;
+    --green: #3fb950; --yellow: #d29922; --red: #f85149;
+    --purple: #8957e5; --orange: #f0883e;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; font-size: 14px; }
+  header { background: var(--surface); border-bottom: 1px solid var(--border); padding: 14px 24px; display: flex; align-items: center; justify-content: space-between; }
+  header h1 { font-size: 18px; font-weight: 600; }
+  .header-right { display: flex; align-items: center; gap: 12px; }
+  select { background: var(--surface); border: 1px solid var(--border); color: var(--text); border-radius: 6px; padding: 6px 10px; font-size: 13px; cursor: pointer; }
+  .refresh-badge { font-size: 12px; color: var(--muted); }
+  .refresh-badge .dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--green); margin-right: 5px; animation: pulse 2s infinite; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.3} }
+
+  main { padding: 20px 24px; max-width: 1400px; margin: 0 auto; }
+
+  /* KPI cards */
+  .kpi-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin-bottom: 20px; }
+  .kpi { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 14px 16px; }
+  .kpi .label { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin-bottom: 6px; }
+  .kpi .value { font-size: 26px; font-weight: 700; line-height: 1; }
+  .kpi .sub { font-size: 11px; color: var(--muted); margin-top: 4px; }
+  .kpi.good .value { color: var(--green); }
+  .kpi.warn .value { color: var(--yellow); }
+  .kpi.bad  .value  { color: var(--red); }
+  .kpi.neutral .value { color: var(--blue); }
+
+  /* SLA tiers */
+  .sla-row { display: grid; grid-template-columns: repeat(3,1fr); gap: 12px; margin-bottom: 20px; }
+  .sla-card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 12px 16px; }
+  .sla-card .sla-label { font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+  .sla-card .sla-bar { height: 8px; border-radius: 4px; background: var(--border); overflow: hidden; margin-bottom: 4px; }
+  .sla-card .sla-fill { height: 100%; border-radius: 4px; transition: width .5s; }
+  .sla-card.t1 .sla-fill { background: var(--green); }
+  .sla-card.t2 .sla-fill { background: var(--blue); }
+  .sla-card.t3 .sla-fill { background: var(--purple); }
+  .sla-card .sla-pct { font-size: 20px; font-weight: 700; }
+  .sla-card .sla-count { font-size: 11px; color: var(--muted); }
+
+  /* Row of two charts */
+  .charts-row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 20px; }
+  @media (max-width: 900px) { .charts-row { grid-template-columns: 1fr; } }
+
+  .chart-card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 16px; }
+  .chart-card h2 { font-size: 13px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; margin-bottom: 14px; }
+
+  /* Stage breakdown bar chart */
+  .stage-bars { display: flex; flex-direction: column; gap: 10px; }
+  .stage-row { display: flex; align-items: center; gap: 8px; }
+  .stage-name { width: 80px; font-size: 12px; color: var(--muted); flex-shrink: 0; }
+  .stage-track { flex: 1; height: 20px; background: var(--border); border-radius: 4px; overflow: hidden; }
+  .stage-bar { height: 100%; border-radius: 4px; transition: width .5s; min-width: 2px; }
+  .stage-val { width: 55px; text-align: right; font-size: 12px; font-variant-numeric: tabular-nums; }
+
+  /* Sparkline canvas */
+  canvas { display: block; width: 100%; }
+
+  /* Calls table */
+  .table-card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 16px; margin-bottom: 20px; overflow-x: auto; }
+  .table-card h2 { font-size: 13px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; margin-bottom: 12px; }
+  table { width: 100%; border-collapse: collapse; }
+  th { text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); padding: 6px 10px; border-bottom: 1px solid var(--border); }
+  td { padding: 7px 10px; font-size: 12px; border-bottom: 1px solid #21262d; font-variant-numeric: tabular-nums; }
+  tr:last-child td { border-bottom: none; }
+  .pill { display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 11px; font-weight: 600; }
+  .pill-fast  { background: #1a4731; color: var(--green); }
+  .pill-ok    { background: #2d3a1a; color: #79c940; }
+  .pill-slow  { background: #3d2d00; color: var(--yellow); }
+  .pill-bad   { background: #3d1a1a; color: var(--red); }
+
+  .empty { text-align: center; color: var(--muted); padding: 32px; }
+  .last-update { font-size: 11px; color: var(--muted); text-align: right; margin-top: -12px; margin-bottom: 16px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Voice Latency Dashboard</h1>
+  <div class="header-right">
+    <select id="window-select" onchange="setWindow(this.value)">
+      <option value="1">Last 1 hour</option>
+      <option value="6">Last 6 hours</option>
+      <option value="24" selected>Last 24 hours</option>
+      <option value="72">Last 3 days</option>
+      <option value="168">Last 7 days</option>
+    </select>
+    <span class="refresh-badge"><span class="dot"></span>Auto-refresh 10s</span>
+  </div>
+</header>
+
+<main>
+  <div class="last-update" id="last-update"></div>
+
+  <!-- KPI row -->
+  <div class="kpi-grid" id="kpi-grid">
+    <div class="kpi neutral"><div class="label">Total Turns</div><div class="value" id="k-turns">—</div></div>
+    <div class="kpi neutral"><div class="label">Total Calls</div><div class="value" id="k-calls">—</div></div>
+    <div class="kpi" id="kpi-avg"><div class="label">Avg Latency</div><div class="value" id="k-avg">—</div><div class="sub">target &lt;500ms</div></div>
+    <div class="kpi" id="kpi-p50"><div class="label">P50</div><div class="value" id="k-p50">—</div><div class="sub">median</div></div>
+    <div class="kpi" id="kpi-p95"><div class="label">P95</div><div class="value" id="k-p95">—</div><div class="sub">tail latency</div></div>
+    <div class="kpi neutral"><div class="label">Cache Hits</div><div class="value" id="k-cache">—</div><div class="sub">of total turns</div></div>
+  </div>
+
+  <!-- SLA tiers -->
+  <div class="sla-row">
+    <div class="sla-card t1">
+      <div class="sla-label">Under 500ms (Excellent)</div>
+      <div class="sla-bar"><div class="sla-fill" id="sla1-bar" style="width:0%"></div></div>
+      <span class="sla-pct" id="sla1-pct">—</span>
+      <span class="sla-count" id="sla1-count"></span>
+    </div>
+    <div class="sla-card t2">
+      <div class="sla-label">Under 1500ms (Acceptable)</div>
+      <div class="sla-bar"><div class="sla-fill" id="sla2-bar" style="width:0%"></div></div>
+      <span class="sla-pct" id="sla2-pct">—</span>
+      <span class="sla-count" id="sla2-count"></span>
+    </div>
+    <div class="sla-card t3">
+      <div class="sla-label">Under 2500ms (Tolerable)</div>
+      <div class="sla-bar"><div class="sla-fill" id="sla3-bar" style="width:0%"></div></div>
+      <span class="sla-pct" id="sla3-pct">—</span>
+      <span class="sla-count" id="sla3-count"></span>
+    </div>
+  </div>
+
+  <!-- Charts -->
+  <div class="charts-row">
+    <div class="chart-card">
+      <h2>Per-Stage Breakdown (avg ms)</h2>
+      <div class="stage-bars" id="stage-bars">
+        <div class="stage-row"><span class="stage-name">Silence</span><div class="stage-track"><div class="stage-bar" id="sb-silence" style="background:#388bfd;width:0%"></div></div><span class="stage-val" id="sv-silence">—</span></div>
+        <div class="stage-row"><span class="stage-name">STT</span><div class="stage-track"><div class="stage-bar" id="sb-stt" style="background:#3fb950;width:0%"></div></div><span class="stage-val" id="sv-stt">—</span></div>
+        <div class="stage-row"><span class="stage-name">LLM</span><div class="stage-track"><div class="stage-bar" id="sb-llm" style="background:#d29922;width:0%"></div></div><span class="stage-val" id="sv-llm">—</span></div>
+        <div class="stage-row"><span class="stage-name">TTS</span><div class="stage-track"><div class="stage-bar" id="sb-tts" style="background:#f0883e;width:0%"></div></div><span class="stage-val" id="sv-tts">—</span></div>
+      </div>
+    </div>
+    <div class="chart-card">
+      <h2>Latency per Turn (last 200)</h2>
+      <canvas id="sparkline" height="160"></canvas>
+    </div>
+  </div>
+
+  <!-- Calls table -->
+  <div class="table-card">
+    <h2>Recent Calls</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>Session</th><th>Turns</th><th>Avg</th><th>Min</th><th>Max</th><th>Lang</th><th>Cache</th><th>Grade</th>
+        </tr>
+      </thead>
+      <tbody id="calls-body"><tr><td colspan="8" class="empty">Loading…</td></tr></tbody>
+    </table>
+  </div>
+</main>
+
+<script>
+let hours = 24;
+let _turns = [], _calls = [], _summary = {};
+
+function setWindow(h) { hours = parseInt(h); refresh(); }
+
+async function refresh() {
+  try {
+    const res = await fetch(`/api/latency?hours=${hours}`);
+    if (!res.ok) throw new Error(res.statusText);
+    const data = await res.json();
+    _turns = data.turns || [];
+    _calls = data.calls || [];
+    _summary = data.summary || {};
+    render();
+    document.getElementById('last-update').textContent = `Last updated: ${new Date().toLocaleTimeString()}`;
+  } catch(e) {
+    document.getElementById('last-update').textContent = `Error: ${e.message}`;
+  }
+}
+
+function render() {
+  const s = _summary;
+  const total = s.total_turns || 0;
+
+  // KPI
+  setText('k-turns', total);
+  setText('k-calls', s.total_calls || 0);
+  setLatency('k-avg', 'kpi-avg', s.avg_ms);
+  setLatency('k-p50', 'kpi-p50', s.p50_ms);
+  setLatency('k-p95', 'kpi-p95', s.p95_ms);
+  const cacheHits = s.cache_hits || 0;
+  const cachePct = total > 0 ? Math.round(cacheHits / total * 100) : 0;
+  setText('k-cache', `${cachePct}%`);
+
+  // SLA
+  const pct1 = total > 0 ? (s.under_500ms  / total * 100) : 0;
+  const pct2 = total > 0 ? (s.under_1500ms / total * 100) : 0;
+  const pct3 = total > 0 ? (s.under_2500ms / total * 100) : 0;
+  setSla('sla1', pct1, s.under_500ms,  total);
+  setSla('sla2', pct2, s.under_1500ms, total);
+  setSla('sla3', pct3, s.under_2500ms, total);
+
+  // Stage bars
+  const stages = [
+    ['silence', s.avg_silence_ms],
+    ['stt',     s.avg_stt_ms],
+    ['llm',     s.avg_llm_ms],
+    ['tts',     s.avg_tts_ms],
+  ];
+  const maxStage = Math.max(...stages.map(x => x[1] || 0), 1);
+  stages.forEach(([k, v]) => {
+    const pct = v ? Math.round(v / maxStage * 100) : 0;
+    document.getElementById(`sb-${k}`).style.width = pct + '%';
+    document.getElementById(`sv-${k}`).textContent = v ? `${v}ms` : '—';
+  });
+
+  // Sparkline
+  drawSparkline(_turns);
+
+  // Calls table
+  renderCalls(_calls);
+}
+
+function setText(id, val) { document.getElementById(id).textContent = val ?? '—'; }
+
+function setLatency(valId, cardId, ms) {
+  const el = document.getElementById(valId);
+  const card = document.getElementById(cardId);
+  el.textContent = ms ? `${ms}ms` : '—';
+  card.className = 'kpi ' + (ms == null ? 'neutral' : ms < 500 ? 'good' : ms < 1500 ? 'warn' : 'bad');
+}
+
+function setSla(prefix, pct, count, total) {
+  document.getElementById(`${prefix}-bar`).style.width = pct.toFixed(1) + '%';
+  document.getElementById(`${prefix}-pct`).textContent = total > 0 ? pct.toFixed(1) + '%' : '—';
+  document.getElementById(`${prefix}-count`).textContent = total > 0 ? ` (${count} / ${total})` : '';
+}
+
+function drawSparkline(turns) {
+  const canvas = document.getElementById('sparkline');
+  const dpr = window.devicePixelRatio || 1;
+  const W = canvas.offsetWidth;
+  const H = 160;
+  canvas.width  = W * dpr;
+  canvas.height = H * dpr;
+  const ctx = canvas.getContext('2d');
+  ctx.scale(dpr, dpr);
+
+  ctx.clearRect(0, 0, W, H);
+
+  if (!turns.length) {
+    ctx.fillStyle = '#8b949e';
+    ctx.font = '13px system-ui';
+    ctx.textAlign = 'center';
+    ctx.fillText('No data for selected window', W/2, H/2);
+    return;
+  }
+
+  const vals = turns.map(t => t.total_ms).filter(v => v > 0);
+  if (!vals.length) return;
+  const maxV = Math.max(...vals, 500);
+  const pad = { l: 40, r: 10, t: 10, b: 24 };
+  const cW = W - pad.l - pad.r;
+  const cH = H - pad.t - pad.b;
+
+  // Grid lines
+  [500, 1000, 1500, 2000].forEach(ms => {
+    if (ms > maxV * 1.1) return;
+    const y = pad.t + cH - (ms / maxV) * cH;
+    ctx.strokeStyle = ms === 500 ? '#3fb95033' : '#30363d';
+    ctx.lineWidth = ms === 500 ? 1.5 : 1;
+    ctx.setLineDash(ms === 500 ? [4,3] : []);
+    ctx.beginPath(); ctx.moveTo(pad.l, y); ctx.lineTo(pad.l + cW, y); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = '#8b949e'; ctx.font = '10px system-ui'; ctx.textAlign = 'right';
+    ctx.fillText(`${ms}`, pad.l - 4, y + 3);
+  });
+
+  // Dots
+  turns.forEach((t, i) => {
+    if (!t.total_ms) return;
+    const x = pad.l + (i / Math.max(turns.length - 1, 1)) * cW;
+    const y = pad.t + cH - (t.total_ms / maxV) * cH;
+    const color = t.total_ms < 500 ? '#3fb950' : t.total_ms < 1500 ? '#d29922' : '#f85149';
+    ctx.fillStyle = color;
+    ctx.beginPath(); ctx.arc(x, y, 3, 0, Math.PI*2); ctx.fill();
+  });
+}
+
+function renderCalls(calls) {
+  const tbody = document.getElementById('calls-body');
+  if (!calls.length) {
+    tbody.innerHTML = '<tr><td colspan="8" class="empty">No call data in selected window.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = calls.slice().reverse().map(c => {
+    const grade = gradeCall(c.avg_ms);
+    return `<tr>
+      <td><code style="font-size:11px">${c.session.slice(0,8)}</code></td>
+      <td>${c.turns}</td>
+      <td>${msCell(c.avg_ms)}</td>
+      <td>${msCell(c.min_ms)}</td>
+      <td>${msCell(c.max_ms)}</td>
+      <td>${c.lang || '—'}</td>
+      <td style="font-size:11px;color:var(--muted)">${c.cache_hits || '—'}</td>
+      <td>${grade}</td>
+    </tr>`;
+  }).join('');
+}
+
+function msCell(ms) {
+  const color = !ms ? 'var(--muted)' : ms < 500 ? 'var(--green)' : ms < 1500 ? 'var(--yellow)' : 'var(--red)';
+  return `<span style="color:${color};font-variant-numeric:tabular-nums">${ms ? ms+'ms' : '—'}</span>`;
+}
+
+function gradeCall(avg) {
+  if (!avg) return '<span class="pill" style="background:var(--border);color:var(--muted)">—</span>';
+  if (avg < 500)  return '<span class="pill pill-fast">Excellent</span>';
+  if (avg < 1500) return '<span class="pill pill-ok">Good</span>';
+  if (avg < 2500) return '<span class="pill pill-slow">Slow</span>';
+  return '<span class="pill pill-bad">Poor</span>';
+}
+
+// Init
+refresh();
+setInterval(refresh, 10000);
+window.addEventListener('resize', () => drawSparkline(_turns));
+</script>
+</body>
+</html>

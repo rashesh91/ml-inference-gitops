@@ -20,10 +20,12 @@ WebSocket protocol (JSON messages):
 import base64
 import json
 import logging
+import re
+import subprocess
 import uuid
 from pathlib import Path
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Query, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from prometheus_client import Gauge
@@ -109,6 +111,104 @@ async def chat_stream(req: TextChatRequest):
         yield "data: [DONE]\n\n"
 
     return StreamingResponse(generate(), media_type="text/event-stream")
+
+
+# ── Latency API ───────────────────────────────────────────────────────────────
+
+def _parse_kv(line: str) -> dict:
+    """Parse 'key=val key2=val2' pairs from a log line."""
+    return dict(m.groups() for m in re.finditer(r'(\w+)=([^\s]+)', line))
+
+
+@app.get("/api/latency")
+async def latency_stats(hours: int = Query(default=24, ge=1, le=168)):
+    """
+    Parse LATENCY and CALL_SUMMARY lines from voice-bridge journal.
+    Returns per-turn breakdown and per-call summaries.
+    """
+    try:
+        result = subprocess.run(
+            ["journalctl", "-u", "voice-bridge",
+             f"--since={hours} hours ago", "--no-pager", "-o", "short-iso"],
+            capture_output=True, text=True, timeout=10,
+        )
+        lines = result.stdout.splitlines()
+    except Exception as e:
+        return JSONResponse({"error": str(e), "turns": [], "calls": [], "summary": {}})
+
+    turns, calls = [], []
+    for line in lines:
+        if "LATENCY " in line:
+            kv = _parse_kv(line)
+            try:
+                turns.append({
+                    "session":     kv.get("session", ""),
+                    "turn":        int(kv.get("turn", 0)),
+                    "lang":        kv.get("lang", ""),
+                    "silence_ms":  int(kv.get("silence_ms", 0)),
+                    "stt_ms":      int(kv.get("stt_ms", 0)),
+                    "llm_ms":      int(kv.get("llm_ms", 0)),
+                    "tts_ms":      int(kv.get("tts_ms", 0)),
+                    "ffmpeg_ms":   int(kv.get("ffmpeg_ms", 0)),
+                    "total_ms":    int(kv.get("total_ms", 0)),
+                    "cache_hit":   kv.get("cache_hit", "0") == "1",
+                })
+            except (ValueError, KeyError):
+                pass
+        elif "CALL_SUMMARY " in line:
+            kv = _parse_kv(line)
+            try:
+                calls.append({
+                    "session":  kv.get("session", ""),
+                    "turns":    int(kv.get("turns", 0)),
+                    "avg_ms":   int(kv.get("avg_ms", 0)),
+                    "min_ms":   int(kv.get("min_ms", 0)),
+                    "max_ms":   int(kv.get("max_ms", 0)),
+                    "lang":     kv.get("lang", ""),
+                    "hangup":   kv.get("hangup", ""),
+                    "cache_hits": kv.get("cache_hits", "n/a"),
+                })
+            except (ValueError, KeyError):
+                pass
+
+    # Aggregate summary
+    total_ms_list = [t["total_ms"] for t in turns if t["total_ms"] > 0]
+    summary = {}
+    if total_ms_list:
+        summary = {
+            "total_turns":   len(turns),
+            "total_calls":   len(calls),
+            "avg_ms":        int(sum(total_ms_list) / len(total_ms_list)),
+            "min_ms":        min(total_ms_list),
+            "max_ms":        max(total_ms_list),
+            "p50_ms":        sorted(total_ms_list)[len(total_ms_list) // 2],
+            "p95_ms":        sorted(total_ms_list)[int(len(total_ms_list) * 0.95)],
+            "under_500ms":   sum(1 for ms in total_ms_list if ms < 500),
+            "under_1500ms":  sum(1 for ms in total_ms_list if ms < 1500),
+            "under_2500ms":  sum(1 for ms in total_ms_list if ms < 2500),
+            "avg_silence_ms": int(sum(t["silence_ms"] for t in turns) / len(turns)),
+            "avg_stt_ms":    int(sum(t["stt_ms"] for t in turns) / len(turns)),
+            "avg_llm_ms":    int(sum(t["llm_ms"] for t in turns) / len(turns)),
+            "avg_tts_ms":    int(sum(t["tts_ms"] for t in turns) / len(turns)),
+            "cache_hits":    sum(1 for t in turns if t["cache_hit"]),
+        }
+    else:
+        summary = {
+            "total_turns": 0, "total_calls": 0,
+            "avg_ms": 0, "min_ms": 0, "max_ms": 0,
+            "p50_ms": 0, "p95_ms": 0,
+            "under_500ms": 0, "under_1500ms": 0, "under_2500ms": 0,
+            "avg_silence_ms": 0, "avg_stt_ms": 0, "avg_llm_ms": 0, "avg_tts_ms": 0,
+            "cache_hits": 0,
+        }
+
+    return {"summary": summary, "turns": turns[-200:], "calls": calls[-50:]}
+
+
+@app.get("/latency")
+async def latency_dashboard():
+    dashboard = STATIC_DIR / "latency.html"
+    return HTMLResponse(dashboard.read_text())
 
 
 # ── Frontend ──────────────────────────────────────────────────────────────────
