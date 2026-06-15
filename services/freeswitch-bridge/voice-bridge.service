@@ -33,7 +33,7 @@ Environment=AGENT_NAME=Priya
 # ── Bridge config ───────────────────────────────────────────────────────────
 Environment=BRIDGE_PORT=8086
 Environment=HEALTH_PORT=8087
-Environment=GATEWAY_BASE=https://aitest.lintel.in
+Environment=GATEWAY_BASE=http://localhost:8001
 Environment=RECORD_SILENCE_SEC=1
 Environment=RECORD_MAX_SEC=15
 Environment=TMP_DIR=/tmp/voice-bridge
