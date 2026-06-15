@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Sanjana FreeSWITCH AI Bridge — v6 (production-grade, sub-500ms)
+Voice AI FreeSWITCH Bridge — v6 (production-grade, sub-500ms)
 ================================================================
 Production fixes over v5:
   - Shared asyncio event loop (one loop, all calls) — removes per-call overhead
@@ -59,8 +59,9 @@ HEALTH_PORT          = int(os.getenv("HEALTH_PORT",           "8087"))
 GATEWAY_BASE         = os.getenv("GATEWAY_BASE",              "https://aitest.lintel.in")
 RECORD_SILENCE_SEC   = float(os.getenv("RECORD_SILENCE_SEC",  "1"))
 RECORD_MAX_SEC       = int(os.getenv("RECORD_MAX_SEC",        "15"))
-TMP_DIR              = os.getenv("TMP_DIR",                   "/tmp/sanjana")
+TMP_DIR              = os.getenv("TMP_DIR",                   "/tmp/voice-bridge")
 MAX_CONCURRENT_CALLS = int(os.getenv("MAX_CONCURRENT_CALLS",  "30"))
+AGENT_NAME           = os.getenv("AGENT_NAME",                "Priya")
 GATEWAY_RETRY_MAX    = 1
 MAX_TRANSCRIPT_LEN   = 2000
 FALLBACK_WAV         = os.getenv(
@@ -122,21 +123,21 @@ LANGUAGES = {
         "name":       "Hindi",
         "lang_code":  "hi-IN",
         "sarvam_spk": "meera",
-        "greeting":   "Namaskar, main Sanjana Symphony customer care se. "
+        "greeting":   f"Namaskar, main {AGENT_NAME} Symphony customer care se. "
                       "Kya sahayata kar sakti hu?",
     },
     "2": {
         "name":       "English",
         "lang_code":  "en-IN",
         "sarvam_spk": "meera",
-        "greeting":   "Hello, I'm Sanjana from Symphony customer care. "
+        "greeting":   f"Hello, I'm {AGENT_NAME} from Symphony customer care. "
                       "How may I help you?",
     },
     "3": {
         "name":       "Gujarati",
         "lang_code":  "gu-IN",
         "sarvam_spk": "meera",
-        "greeting":   "Namaskar, hu Sanjana Symphony customer care mathi. "
+        "greeting":   f"Namaskar, hu {AGENT_NAME} Symphony customer care mathi. "
                       "Shu madad kari shaku?",
     },
 }
@@ -1008,7 +1009,7 @@ def serve():
     srv.listen(50)
     srv.settimeout(1.0)   # allows checking _shutdown every second
     log.info(
-        f"Sanjana bridge :{BRIDGE_PORT} | "
+        f"Voice bridge [{AGENT_NAME}] :{BRIDGE_PORT} | "
         f"STT={STT_PROVIDER} TTS={TTS_PROVIDER} "
         f"DF={'on' if _df_model else 'off'} "
         f"max_calls={MAX_CONCURRENT_CALLS}"

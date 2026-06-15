@@ -1,0 +1,54 @@
+[Unit]
+Description=Voice AI FreeSWITCH Bridge (sub-500ms)
+After=freeswitch.service network-online.target
+Requires=freeswitch.service
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+User=root
+WorkingDirectory=/opt/voice-bridge
+ExecStart=/opt/voice-bridge/venv/bin/python3 /opt/voice-bridge/bridge.py
+
+# Graceful shutdown: send SIGTERM, wait 60s for in-flight calls, then SIGKILL
+KillMode=mixed
+KillSignal=SIGTERM
+TimeoutStopSec=60
+
+# Restart policy: always restart, 5s cooldown, rate-limit to 5 restarts/minute
+Restart=always
+RestartSec=5
+
+# Resource limits
+LimitNOFILE=65536
+LimitNPROC=4096
+MemoryMax=2G
+CPUQuota=200%
+
+# ── Agent identity ──────────────────────────────────────────────────────────
+# Set AGENT_NAME to whatever name the AI should introduce itself as.
+# This propagates into greetings and LLM system prompt automatically.
+Environment=AGENT_NAME=Priya
+
+# ── Bridge config ───────────────────────────────────────────────────────────
+Environment=BRIDGE_PORT=8086
+Environment=HEALTH_PORT=8087
+Environment=GATEWAY_BASE=https://aitest.lintel.in
+Environment=RECORD_SILENCE_SEC=1
+Environment=RECORD_MAX_SEC=15
+Environment=TMP_DIR=/tmp/voice-bridge
+Environment=MAX_CONCURRENT_CALLS=30
+
+# ── Providers ───────────────────────────────────────────────────────────────
+Environment=STT_PROVIDER=sarvam
+Environment=TTS_PROVIDER=sarvam
+Environment=DEEPFILTER_ENABLED=true
+# Get your Sarvam API key at https://dashboard.sarvam.ai
+Environment=SARVAM_API_KEY=
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=voice-bridge
+
+[Install]
+WantedBy=multi-user.target

@@ -9,6 +9,7 @@ Loop:
 import asyncio
 import json
 import logging
+import os
 import re
 from dataclasses import dataclass, field
 from typing import AsyncIterator, Callable
@@ -20,18 +21,20 @@ from .tools import TOOLS, TOOLS_SCHEMA
 
 log = logging.getLogger(__name__)
 
-SANJANA_INSTRUCTION = """You are Sanjana, Symphony Support AI.
+AGENT_NAME = os.getenv("AGENT_NAME", "Priya")
+
+AGENT_INSTRUCTION = f"""You are {AGENT_NAME}, Symphony Support AI.
 CRITICAL SPEED RULE: Complete call as fast as possible.
 - NO filler words ("Okay", "I understand", "Let me check", "ji", "theek hai")
 - ONE question at a time
 - Match customer's language (Hindi/Gujarati/English/Tamil/Telugu)
 
 STEP 1 GREETING:
-  Hi: "Namaskar, main Sanjana Symphony customer care se. Kya sahayata kar sakti hu?"
-  Gu: "Namaskar, hu Sanjana Symphony customer care mathi. Shu madad kari shaku?"
-  En: "Hello, Sanjana from Symphony customer care. How may I help you?"
-  Ta: "Vanakkam, Symphony customer care Sanjana pesugiren. Enna udavi seyyalaam?"
-  Te: "Namaskaram, Symphony customer care Sanjana. Ela sahayam chesukovalanukuntunnaru?"
+  Hi: "Namaskar, main {AGENT_NAME} Symphony customer care se. Kya sahayata kar sakti hu?"
+  Gu: "Namaskar, hu {AGENT_NAME} Symphony customer care mathi. Shu madad kari shaku?"
+  En: "Hello, {AGENT_NAME} from Symphony customer care. How may I help you?"
+  Ta: "Vanakkam, Symphony customer care {AGENT_NAME} pesugiren. Enna udavi seyyalaam?"
+  Te: "Namaskaram, Symphony customer care {AGENT_NAME}. Ela sahayam chesukovalanukuntunnaru?"
 
 STEP 2 CONTACT: mobile number -> name
 STEP 3 LOCATION: pincode -> full address
@@ -86,7 +89,7 @@ def _build_alpaca_prompt(history: list[dict], user_text: str) -> str:
     transcript = "\n".join(lines) if lines else f"Customer: {user_text}"
 
     return (
-        f"### Instruction:\n{SANJANA_INSTRUCTION}\n\n"
+        f"### Instruction:\n{AGENT_INSTRUCTION}\n\n"
         f"### Input:\n"
         f"Language: English\n"
         f"Conversation so far:\n{transcript}\n\n"

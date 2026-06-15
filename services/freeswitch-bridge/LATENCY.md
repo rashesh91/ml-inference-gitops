@@ -1,4 +1,4 @@
-# Sanjana Voice AI — Latency Analysis & Benchmarks
+# Voice AI Bridge — Latency Analysis & Benchmarks
 
 ## Current Architecture Latency (v3 baseline)
 
@@ -55,14 +55,14 @@ The bridge logs a `LATENCY` line per turn and `CALL_SUMMARY` at end of call:
 
 ```bash
 # Average latency per turn over last 100 calls
-journalctl -u sanjana-bridge --since "1 hour ago" \
+journalctl -u voice-bridge --since "1 hour ago" \
   | grep LATENCY \
   | awk '{for(i=1;i<=NF;i++) if($i~/total_ms/) print $i}' \
   | cut -d= -f2 \
   | awk '{sum+=$1; n++} END {print "avg:", sum/n, "ms over", n, "turns"}'
 
 # Per-stage breakdown
-journalctl -u sanjana-bridge --since "1 hour ago" \
+journalctl -u voice-bridge --since "1 hour ago" \
   | grep LATENCY \
   | awk '{
       for(i=1;i<=NF;i++) {
