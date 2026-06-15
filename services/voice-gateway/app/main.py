@@ -17,21 +17,27 @@ WebSocket protocol (JSON messages):
     {type: "done"}
     {type: "error", message: "..."}
 """
+import asyncio
 import base64
 import json
 import logging
 import re
+import secrets
 import subprocess
+import time
 import uuid
+from collections import deque
+from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, Query, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from prometheus_client import Gauge
 from prometheus_fastapi_instrumentator import Instrumentator
 from pydantic import BaseModel
 
+from .config import settings
 from .pipeline import Session, process_voice_turn
 
 logging.basicConfig(level=logging.INFO)
@@ -39,7 +45,63 @@ log = logging.getLogger(__name__)
 
 STATIC_DIR = Path(__file__).parent.parent / "static"
 
-app = FastAPI(title="Voice Agentic AI Gateway", version="1.0.0")
+# In-memory sessions  (use Redis for multi-pod prod)
+_sessions: dict[str, Session] = {}
+
+# ── Per-IP rate limiter (no extra deps) ──────────────────────────────────────
+# Maps IP → deque of request timestamps within the sliding window.
+_rate_buckets: dict[str, deque] = {}
+
+def _is_rate_limited(ip: str) -> bool:
+    now = time.monotonic()
+    window = 60.0
+    bucket = _rate_buckets.setdefault(ip, deque())
+    while bucket and bucket[0] < now - window:
+        bucket.popleft()
+    if len(bucket) >= settings.rate_limit_rpm:
+        return True
+    bucket.append(now)
+    return False
+
+
+# ── API-key auth ─────────────────────────────────────────────────────────────
+
+async def _require_api_key(x_api_key: str | None = Header(default=None, alias="X-API-Key")):
+    if not settings.gateway_api_key:
+        return   # dev mode — key not configured, allow all
+    if not x_api_key or not secrets.compare_digest(x_api_key, settings.gateway_api_key):
+        raise HTTPException(status_code=401, detail="Invalid or missing X-API-Key header")
+
+
+def _check_ws_api_key(api_key: str | None) -> None:
+    if not settings.gateway_api_key:
+        return
+    if not api_key or not secrets.compare_digest(api_key, settings.gateway_api_key):
+        raise HTTPException(status_code=401, detail="Invalid or missing api_key query param")
+
+
+# ── Session TTL eviction background task ─────────────────────────────────────
+
+async def _evict_stale_sessions():
+    ttl = settings.session_ttl_minutes * 60
+    while True:
+        await asyncio.sleep(300)   # sweep every 5 minutes
+        now = time.time()
+        stale = [sid for sid, s in list(_sessions.items()) if now - s.last_accessed > ttl]
+        for sid in stale:
+            _sessions.pop(sid, None)
+            log.info(f"Evicted stale session: {sid}")
+        if stale:
+            log.info(f"Session sweep: evicted {len(stale)}, remaining {len(_sessions)}")
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    asyncio.create_task(_evict_stale_sessions())
+    yield
+
+
+app = FastAPI(title="Voice Agentic AI Gateway", version="1.0.0", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 # Prometheus metrics — KEDA ScaledObject watches websocket_active_connections
@@ -48,9 +110,6 @@ active_ws_connections = Gauge(
     "Number of active WebSocket sessions",
 )
 Instrumentator().instrument(app).expose(app, endpoint="/metrics")
-
-# In-memory sessions  (use Redis for multi-pod prod)
-_sessions: dict[str, Session] = {}
 
 
 # ── Health ────────────────────────────────────────────────────────────────────
@@ -68,9 +127,14 @@ class TextChatRequest(BaseModel):
 
 
 @app.post("/api/chat")
-async def chat_text(req: TextChatRequest):
+async def chat_text(req: TextChatRequest, request: Request, _auth=Depends(_require_api_key)):
+    if _is_rate_limited(request.client.host):
+        raise HTTPException(status_code=429, detail="Rate limit exceeded")
+    if len(req.text) > settings.max_text_len:
+        raise HTTPException(status_code=400, detail=f"Text exceeds {settings.max_text_len} chars")
     session_id = req.session_id or str(uuid.uuid4())
     session = _sessions.setdefault(session_id, Session(session_id))
+    session.touch()
 
     from .agent import run_agent
     answer = await run_agent(req.text, session.history)
@@ -90,14 +154,19 @@ async def chat_text(req: TextChatRequest):
 # ── REST: streaming text chat (SSE) ──────────────────────────────────────────
 
 @app.post("/api/chat/stream")
-async def chat_stream(req: TextChatRequest):
+async def chat_stream(req: TextChatRequest, request: Request, _auth=Depends(_require_api_key)):
     """
     SSE endpoint for streaming LLM response sentence-by-sentence.
     Bridge calls this to overlap TTS generation with LLM generation.
     Events: data: {"sentence": "..."}\n\n  then  data: [DONE]\n\n
     """
+    if _is_rate_limited(request.client.host):
+        raise HTTPException(status_code=429, detail="Rate limit exceeded")
+    if len(req.text) > settings.max_text_len:
+        raise HTTPException(status_code=400, detail=f"Text exceeds {settings.max_text_len} chars")
     session_id = req.session_id or str(uuid.uuid4())
     session = _sessions.setdefault(session_id, Session(session_id))
+    session.touch()
 
     from .agent import run_agent_streaming
 
@@ -222,11 +291,25 @@ async def serve_frontend():
 # ── WebSocket ─────────────────────────────────────────────────────────────────
 
 @app.websocket("/ws/{session_id}")
-async def websocket_endpoint(ws: WebSocket, session_id: str):
+async def websocket_endpoint(ws: WebSocket, session_id: str, api_key: str | None = Query(default=None)):
+    # Auth check before accepting — close with 1008 (policy violation) if invalid
+    try:
+        _check_ws_api_key(api_key)
+    except HTTPException:
+        await ws.close(code=1008)
+        return
+
+    # Rate-limit by connecting IP
+    client_ip = ws.client.host if ws.client else "unknown"
+    if _is_rate_limited(client_ip):
+        await ws.close(code=1008)
+        return
+
     await ws.accept()
     active_ws_connections.inc()
     session = _sessions.setdefault(session_id, Session(session_id))
-    log.info(f"WebSocket connected: {session_id}")
+    session.touch()
+    log.info(f"WebSocket connected: {session_id} from {client_ip}")
 
     try:
         while True:
@@ -235,12 +318,16 @@ async def websocket_endpoint(ws: WebSocket, session_id: str):
 
             if msg_type == "reset":
                 session.history.clear()
+                session.touch()
                 await ws.send_json({"type": "status", "message": "Session reset."})
                 continue
 
             if msg_type == "text":
-                # Text-only turn (no STT needed)
-                await _handle_text_turn(ws, session, msg.get("text", ""))
+                text = msg.get("text", "")
+                if len(text) > settings.max_text_len:
+                    await ws.send_json({"type": "error", "message": f"Text exceeds {settings.max_text_len} chars"})
+                    continue
+                await _handle_text_turn(ws, session, text)
                 continue
 
             if msg_type == "audio":
@@ -249,6 +336,9 @@ async def websocket_endpoint(ws: WebSocket, session_id: str):
                     await ws.send_json({"type": "error", "message": "No audio data"})
                     continue
                 audio_bytes = base64.b64decode(audio_b64)
+                if len(audio_bytes) > settings.max_audio_bytes:
+                    await ws.send_json({"type": "error", "message": "Audio payload too large (max 5 MB)"})
+                    continue
                 await _handle_voice_turn(ws, session, audio_bytes)
                 continue
 

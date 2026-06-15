@@ -78,22 +78,35 @@ def _extract_json_object(text: str) -> str | None:
     return None
 
 
+# Patterns an attacker could use to hijack the Alpaca prompt structure
+_INJECTION_RE = re.compile(
+    r"(###\s*(Instruction|Input|Response)\b|TOOL\s*:\s*\{|ANSWER\s*:)",
+    re.IGNORECASE,
+)
+
+
+def _sanitize(text: str) -> str:
+    """Strip prompt-injection sequences and hard-cap length."""
+    text = text[: settings.max_text_len]
+    return _INJECTION_RE.sub("[filtered]", text)
+
+
 def _build_alpaca_prompt(history: list[dict], user_text: str) -> str:
     """Build Alpaca-format prompt matching fine-tuning training data."""
-    # Reconstruct conversation transcript from history
+    safe_user = _sanitize(user_text)
     lines = []
     for msg in history:
         role = "Agent" if msg["role"] == "assistant" else "Customer"
-        lines.append(f"{role}: {msg['content']}")
-    lines.append(f"Customer: {user_text}")
-    transcript = "\n".join(lines) if lines else f"Customer: {user_text}"
+        lines.append(f"{role}: {_sanitize(msg['content'])}")
+    lines.append(f"Customer: {safe_user}")
+    transcript = "\n".join(lines) if lines else f"Customer: {safe_user}"
 
     return (
         f"### Instruction:\n{AGENT_INSTRUCTION}\n\n"
         f"### Input:\n"
         f"Language: English\n"
         f"Conversation so far:\n{transcript}\n\n"
-        f"Customer just said: {user_text}\n\n"
+        f"Customer just said: {safe_user}\n\n"
         f"### Response:\n"
         f"Agent:"
     )

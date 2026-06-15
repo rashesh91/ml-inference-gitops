@@ -1,9 +1,11 @@
 """
 Voice pipeline: audio bytes → transcript → LLM agent → TTS audio bytes
 """
+import asyncio
 import base64
 import logging
 import os
+import time
 from dataclasses import dataclass, field
 from typing import Callable
 
@@ -34,6 +36,10 @@ _tracer = trace.get_tracer("voice-gateway")
 class Session:
     session_id: str
     history: list[dict] = field(default_factory=list)
+    last_accessed: float = field(default_factory=time.time)
+
+    def touch(self):
+        self.last_accessed = time.time()
 
     def add_turn(self, user: str, assistant: str):
         self.history.append({"role": "user", "content": user})
@@ -41,6 +47,7 @@ class Session:
         max_msgs = settings.max_history_turns * 2
         if len(self.history) > max_msgs:
             self.history = self.history[-max_msgs:]
+        self.touch()
 
 
 @dataclass
@@ -72,7 +79,7 @@ async def process_voice_turn(
 
     with _tracer.start_as_current_span("stt.transcribe") as stt_span:
         stt_span.set_attribute("audio.size_bytes", len(audio_bytes))
-        transcript = await _transcribe(audio_bytes)
+        transcript = await _transcribe_with_retry(audio_bytes)
         stt_span.set_attribute("transcript.length", len(transcript))
     log.info(f"[{session.session_id}] Transcript: '{transcript}'")
 
@@ -115,7 +122,7 @@ async def process_voice_turn(
     with _tracer.start_as_current_span("tts.synthesize") as tts_span:
         tts_span.set_attribute("text.length", len(answer))
         tts_span.set_attribute("voice", settings.tts_voice)
-        audio_b64 = await _synthesize(answer)
+        audio_b64 = await _synthesize_with_retry(answer)
         tts_span.set_attribute("audio_b64.length", len(audio_b64))
     await emit("response", {"text": answer})
 
@@ -140,6 +147,19 @@ async def _transcribe(audio_bytes: bytes) -> str:
         return resp.json()["text"]
 
 
+async def _transcribe_with_retry(audio_bytes: bytes, retries: int = 2) -> str:
+    for attempt in range(retries + 1):
+        try:
+            return await _transcribe(audio_bytes)
+        except Exception as exc:
+            if attempt == retries:
+                raise
+            wait = 0.4 * (attempt + 1)
+            log.warning(f"STT attempt {attempt + 1} failed ({exc}), retrying in {wait}s")
+            await asyncio.sleep(wait)
+    raise RuntimeError("STT failed after retries")  # unreachable
+
+
 async def _synthesize(text: str) -> str:
     """Returns base64-encoded MP3."""
     async with httpx.AsyncClient(timeout=20.0) as client:
@@ -149,3 +169,16 @@ async def _synthesize(text: str) -> str:
         )
         resp.raise_for_status()
         return base64.b64encode(resp.content).decode()
+
+
+async def _synthesize_with_retry(text: str, retries: int = 2) -> str:
+    for attempt in range(retries + 1):
+        try:
+            return await _synthesize(text)
+        except Exception as exc:
+            if attempt == retries:
+                raise
+            wait = 0.4 * (attempt + 1)
+            log.warning(f"TTS attempt {attempt + 1} failed ({exc}), retrying in {wait}s")
+            await asyncio.sleep(wait)
+    raise RuntimeError("TTS failed after retries")  # unreachable
