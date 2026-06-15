@@ -25,8 +25,8 @@ llmAgent:
     enabled: true
     count: 1
   model:
-    name: "assistant"
-    huggingfaceId: "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
+    name: "Qwen/Qwen2.5-3B-Instruct"
+    huggingfaceId: "Qwen/Qwen2.5-3B-Instruct"
     cacheDir: /model-cache
     maxModelLen: 2048
     gpuMemoryUtilization: 0.85
@@ -51,6 +51,8 @@ ttsService:
 
 voiceGateway:
   replicas: 1
+  llmUrl: "http://217.18.55.111:8000"
+  llmModel: "Qwen/Qwen2.5-3B-Instruct"
   ingress:
     host: aitest.lintel.in
     tlsSecret: aitest-tls

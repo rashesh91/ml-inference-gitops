@@ -27,9 +27,9 @@ spec:
             - name: TTS_URL
               value: "http://tts-service:8002"
             - name: LLM_URL
-              value: "http://llm-agent:{{ .Values.llmAgent.port }}"
+              value: {{ .Values.voiceGateway.llmUrl | default (printf "http://llm-agent:%d" (int .Values.llmAgent.port)) | quote }}
             - name: LLM_MODEL
-              value: {{ .Values.llmAgent.model.name | quote }}
+              value: {{ .Values.voiceGateway.llmModel | default .Values.llmAgent.model.name | quote }}
             - name: TTS_VOICE
               value: {{ .Values.ttsService.voice | quote }}
             - name: OTEL_EXPORTER_OTLP_ENDPOINT
