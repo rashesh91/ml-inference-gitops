@@ -129,7 +129,7 @@ LANGUAGES = {
     "2": {
         "name":       "English",
         "lang_code":  "en-IN",
-        "sarvam_spk": "priya",
+        "sarvam_spk": "anushka",
         "greeting":   f"Hello, I'm {AGENT_NAME} from Symphony customer care. "
                       "How may I help you?",
     },
@@ -453,7 +453,7 @@ def _tts_sarvam(text: str, lang_code: str, speaker: str) -> bytes | None:
                 "speaker":               speaker,
                 "speech_sample_rate":    8000,
                 "enable_preprocessing":  True,
-                "model":                 "bulbul:v1",
+                "model":                 "bulbul:v2",
             },
             timeout=15,
         )
