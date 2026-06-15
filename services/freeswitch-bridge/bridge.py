@@ -122,21 +122,21 @@ LANGUAGES = {
     "1": {
         "name":       "Hindi",
         "lang_code":  "hi-IN",
-        "sarvam_spk": "meera",
+        "sarvam_spk": "anushka",
         "greeting":   f"Namaskar, main {AGENT_NAME} Symphony customer care se. "
                       "Kya sahayata kar sakti hu?",
     },
     "2": {
         "name":       "English",
         "lang_code":  "en-IN",
-        "sarvam_spk": "meera",
+        "sarvam_spk": "priya",
         "greeting":   f"Hello, I'm {AGENT_NAME} from Symphony customer care. "
                       "How may I help you?",
     },
     "3": {
         "name":       "Gujarati",
         "lang_code":  "gu-IN",
-        "sarvam_spk": "meera",
+        "sarvam_spk": "vidya",
         "greeting":   f"Namaskar, hu {AGENT_NAME} Symphony customer care mathi. "
                       "Shu madad kari shaku?",
     },
